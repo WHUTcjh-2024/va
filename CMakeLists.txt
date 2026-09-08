@@ -20,9 +20,22 @@ add_executable(VALInvite WIN32
     src/config.cpp
 )
 
+add_executable(VALInviteOffline
+    tools/offline_recognizer.cpp
+    src/recognizer.cpp
+)
+
 target_include_directories(VALInvite PRIVATE include)
+target_include_directories(VALInviteOffline PRIVATE include)
 target_compile_features(VALInvite PRIVATE cxx_std_20)
+target_compile_features(VALInviteOffline PRIVATE cxx_std_20)
 target_compile_definitions(VALInvite PRIVATE
+    UNICODE
+    _UNICODE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+)
+target_compile_definitions(VALInviteOffline PRIVATE
     UNICODE
     _UNICODE
     WIN32_LEAN_AND_MEAN
@@ -50,6 +63,8 @@ add_custom_command(TARGET VALInvite POST_BUILD
 
 if (MSVC)
     target_compile_options(VALInvite PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+    target_compile_options(VALInviteOffline PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
 else()
     target_compile_options(VALInvite PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(VALInviteOffline PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()

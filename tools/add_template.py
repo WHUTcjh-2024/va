@@ -49,6 +49,23 @@ HEADER_BYTES = len(MAGIC) + 6 * 2 + 1 + 1  # 18
 FILE_BYTES = HEADER_BYTES + SIDE * SIDE  # 1042
 
 
+def _image_pixels(image: Image.Image):
+    """Use Pillow's non-deprecated flat iterator when available."""
+    if hasattr(image, "get_flattened_data"):
+        return image.get_flattened_data()
+    return image.getdata()
+
+
+def runtime_grayscale(image: Image.Image) -> Image.Image:
+    """Match the integer BT.601 BGRA-to-gray conversion in src/app.cpp."""
+    rgb = image.convert("RGB")
+    pixels = bytes(
+        (77 * red + 150 * green + 29 * blue + 128) >> 8
+        for red, green, blue in _image_pixels(rgb)
+    )
+    return Image.frombytes("L", rgb.size, pixels)
+
+
 def _u16(value: int) -> bytes:
     return int(value).to_bytes(2, "little")
 
@@ -217,7 +234,8 @@ def main(argv: list[str]) -> int:
         print(f"error: code must match ^[A-Z]{{3}}[0-9]{{3}}$ (got '{code}')")
         return 2
 
-    image = Image.open(image_path).convert("L")
+    with Image.open(image_path) as source:
+        image = runtime_grayscale(source)
     iw, ih = image.size
     if x < 0 or y < 0 or x + w > iw or y + h > ih:
         print(f"error: ROI {x},{y} {w}x{h} is outside image {iw}x{ih}")
