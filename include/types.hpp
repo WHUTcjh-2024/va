@@ -63,6 +63,11 @@ struct Candidate final {
     bool edgeSlotsComplete{};
     bool backgroundProbeOk{};
     bool highConfidence{};
+    // True when most slots carry real ink (each bbox above a small floor).
+    // False when the ROI is blank/idle - the recognizer still hard-selects six
+    // characters there, so structureValid alone cannot tell "no code" from
+    // "code".
+    bool codeVisible{};
 };
 
 struct TimingSnapshot final {

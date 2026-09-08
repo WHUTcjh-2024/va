@@ -222,6 +222,19 @@ void App::onCandidate(const Candidate& candidate) {
     if (state_ != RunState::Armed && state_ != RunState::Confirmed) return;
 
     const LARGE_INTEGER decisionStart = timer_.now();
+
+    // idle/no-code: the ROI shows no readable code (few or no slots carry ink).
+    // A blank ROI still hard-selects six characters, so structureValid stays
+    // true and cannot express "code gone". Clear the one-shot memory here so a
+    // later code - even the identical one re-broadcast - can submit again.
+    if (!candidate.codeVisible) {
+        pendingCandidate_.reset();
+        lastSubmittedCode_.reset();
+        timing_.decisionMs = timer_.elapsedMs(decisionStart, timer_.now());
+        ui_.update(state_, config_, timing_, candidate, lastError_);
+        return;
+    }
+
     if (!recognizer_.shouldSubmit(candidate, pendingCandidate_)) {
         pendingCandidate_ = candidate.structureValid ? std::optional<std::string>{candidate.code} : std::nullopt;
         if (!candidate.structureValid) lastSubmittedCode_.reset();

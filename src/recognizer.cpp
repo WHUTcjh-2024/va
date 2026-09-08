@@ -39,6 +39,13 @@ constexpr std::size_t kTemplatePixels =
 
 constexpr int kProbeColumns = 2;
 
+// A slot "has ink" when its measured bounding box (on the normalized 32x32
+// content) clears a small absolute floor. A blank/no-code ROI yields ~0 for
+// every slot even though the recognizer still hard-selects six characters.
+constexpr int kInkMinWidth = 3;
+constexpr int kInkMinHeight = 8;
+constexpr int kInkSlotsRequired = 4;
+
 [[nodiscard]] bool allowedInSlot(int slot, char value) noexcept {
     return slot < 3
         ? value >= 'A' && value <= 'Z'
@@ -815,12 +822,29 @@ Candidate Recognizer::recognize(
     candidate.backgroundProbeOk =
         probeOk;
 
+    int inkSlots = 0;
+
+    for (const auto& slotResult :
+         candidate.slots) {
+
+        if (slotResult.bboxWidth >=
+                kInkMinWidth &&
+            slotResult.bboxHeight >=
+                kInkMinHeight) {
+            ++inkSlots;
+        }
+    }
+
+    candidate.codeVisible =
+        inkSlots >= kInkSlotsRequired;
+
     candidate.highConfidence =
         candidate.structureValid &&
         allScores &&
         allBoxes &&
         edgeBoxes &&
-        probeOk;
+        probeOk &&
+        candidate.codeVisible;
 
     return candidate;
 }
@@ -865,17 +889,61 @@ bool Recognizer::shouldSubmit(
     if (!candidate.structureValid ||
         !candidate.boundingBoxesComplete ||
         !candidate.edgeSlotsComplete ||
-        !candidate.backgroundProbeOk) {
+        !candidate.backgroundProbeOk ||
+        !candidate.codeVisible) {
 
         return false;
     }
 
+    // Level A: single-frame high confidence (score >= normal score threshold,
+    // margin >= normal margin threshold for every slot, plus the structure,
+    // bbox, edge and background-probe gates above).
     if (candidate.highConfidence) {
         return true;
     }
 
-    return previous &&
-           *previous == candidate.code;
+    // Level B: two consecutive identical frames. A low-score candidate must not
+    // be submitted just because two frames agree: every slot still has to clear
+    // a conservative floor derived from the normal thresholds. Prefer Timeout
+    // over a Wrong submission.
+    if (!previous || *previous != candidate.code) {
+        return false;
+    }
+
+    const double fallbackScore =
+        std::max(
+            0.0,
+            config_.scoreThreshold - 0.03
+        );
+
+    // Wrong reads on an ambiguous ROI are almost always near-ties between two
+    // characters (min-margin around 0), while a correct read keeps a small but
+    // non-zero min-margin. 0.075 * marginThreshold lands at ~0.006 for the
+    // default 0.08 - enough to reject the ties, far below the single-frame
+    // high-confidence margin. Prefer Timeout over Wrong.
+    const double fallbackMargin =
+        std::max(
+            0.0,
+            config_.marginThreshold * 0.075
+        );
+
+    for (const auto& slot :
+         candidate.slots) {
+
+        if (static_cast<double>(
+                slot.bestScore) <
+            fallbackScore) {
+            return false;
+        }
+
+        if (static_cast<double>(
+                slot.margin) <
+            fallbackMargin) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 } // namespace valinvite
