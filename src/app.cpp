@@ -94,26 +94,104 @@ int App::run() {
 }
 
 void App::start() {
-    if (state_ != RunState::Setup && state_ != RunState::Stopped) return;
+    if (state_ != RunState::Setup &&
+        state_ != RunState::Stopped) {
+        return;
+    }
+
     if (!recognizer_.ready()) {
-        reportWarning(L"识别模板未加载，无法启动");
+        reportWarning(
+            L"识别模板未加载，无法启动"
+        );
         return;
     }
-    const HWND source = ui_.selectedWindow();
+
+    if (!config_.roi.valid()) {
+        reportWarning(
+            L"ROI 尚未框选"
+        );
+        return;
+    }
+
+    const HWND source =
+        ui_.selectedWindow();
+
+    if (!source ||
+        !IsWindow(source)) {
+        reportWarning(
+            L"请选择有效的直播窗口"
+        );
+        return;
+    }
+
     std::wstring error;
-    recognizer_.setConfig(config_.recognition);
-    capture_.setFrameCallback([this](const BgraRoiFrame& frame) { onFrame(frame); });
-    if (!capture_.start(source, config_.roi, error)) {
+
+    recognizer_.setConfig(
+        config_.recognition
+    );
+
+    // Hot Path buffer 只在 START 时分配。
+    const std::size_t graySize =
+        static_cast<std::size_t>(
+            config_.roi.width
+        ) *
+        static_cast<std::size_t>(
+            config_.roi.height
+        );
+
+    grayBuffer_.assign(
+        graySize,
+        0
+    );
+
+    capture_.setFrameCallback(
+        [this](
+            const BgraRoiFrame& frame
+        ) {
+            onFrame(frame);
+        }
+    );
+
+    if (!capture_.start(
+            source,
+            config_.roi,
+            error)) {
+
+        capture_.setFrameCallback({});
+
         reportWarning(error);
-        ui_.update(state_, config_, timing_, std::nullopt, lastError_);
+
+        ui_.update(
+            state_,
+            config_,
+            timing_,
+            std::nullopt,
+            lastError_
+        );
+
         return;
     }
+
     lastError_.clear();
-    acceptingFrames_.store(true, std::memory_order_release);
-    state_ = RunState::Armed;
+
+    acceptingFrames_.store(
+        true,
+        std::memory_order_release
+    );
+
+    state_ =
+        RunState::Armed;
+
     pendingCandidate_.reset();
     lastSubmittedCode_.reset();
-    ui_.update(state_, config_, timing_, std::nullopt, lastError_);
+
+    ui_.update(
+        state_,
+        config_,
+        timing_,
+        std::nullopt,
+        lastError_
+    );
 }
 
 void App::stop() {
@@ -170,21 +248,147 @@ void App::onCandidate(const Candidate& candidate) {
     ui_.update(state_, config_, timing_, candidate, lastError_);
 }
 
-void App::onFrame(const BgraRoiFrame& frame) {
-    if (!acceptingFrames_.load(std::memory_order_acquire) || frame.pixels == nullptr || frame.width == 0 || frame.height == 0 || frame.rowPitch < frame.width * 4U) return;
-    const LARGE_INTEGER start = timer_.now();
-    std::vector<std::uint8_t> gray(static_cast<std::size_t>(frame.width) * frame.height);
-    for (std::uint32_t y = 0; y < frame.height; ++y) {
-        const auto* source = frame.pixels + static_cast<std::size_t>(y) * frame.rowPitch;
-        auto* target = gray.data() + static_cast<std::size_t>(y) * frame.width;
-        for (std::uint32_t x = 0; x < frame.width; ++x) {
-            const auto b = source[x * 4U], g = source[x * 4U + 1U], r = source[x * 4U + 2U];
-            target[x] = static_cast<std::uint8_t>((29U * b + 150U * g + 77U * r + 128U) >> 8U);
+void App::onFrame(
+    const BgraRoiFrame& frame
+) {
+    if (!acceptingFrames_.load(
+            std::memory_order_acquire)) {
+        return;
+    }
+
+    if (frame.pixels == nullptr ||
+        frame.width == 0 ||
+        frame.height == 0 ||
+        frame.rowPitch <
+            frame.width * 4U) {
+        return;
+    }
+
+    // WGC CreateFreeThreaded 的 FrameArrived
+    // 不一定跑在 UI Thread。
+    // 所以真正 Hot Thread 的优先级在这里设置。
+    thread_local bool
+        performanceConfigured = false;
+
+    if (!performanceConfigured) {
+        if (config_.highPriority) {
+            SetThreadPriority(
+                GetCurrentThread(),
+                THREAD_PRIORITY_HIGHEST
+            );
+        }
+
+        if (config_.cpuAffinity >= 0 &&
+            config_.cpuAffinity <
+                static_cast<int>(
+                    sizeof(DWORD_PTR) * 8U
+                )) {
+
+            const DWORD_PTR mask =
+                static_cast<DWORD_PTR>(1)
+                << config_.cpuAffinity;
+
+            SetThreadAffinityMask(
+                GetCurrentThread(),
+                mask
+            );
+        }
+
+        performanceConfigured = true;
+    }
+
+    const std::size_t required =
+        static_cast<std::size_t>(
+            frame.width
+        ) *
+        static_cast<std::size_t>(
+            frame.height
+        );
+
+    // 正常情况下 START 时已分配好。
+    // 运行中绝不 resize，避免 Hot Path heap allocation。
+    if (grayBuffer_.size() != required) {
+        return;
+    }
+
+    const LARGE_INTEGER start =
+        timer_.now();
+
+    for (std::uint32_t y = 0;
+         y < frame.height;
+         ++y) {
+
+        const auto* source =
+            frame.pixels +
+            static_cast<std::size_t>(y) *
+                frame.rowPitch;
+
+        auto* target =
+            grayBuffer_.data() +
+            static_cast<std::size_t>(y) *
+                frame.width;
+
+        for (std::uint32_t x = 0;
+             x < frame.width;
+             ++x) {
+
+            const auto b =
+                source[x * 4U];
+
+            const auto g =
+                source[x * 4U + 1U];
+
+            const auto r =
+                source[x * 4U + 2U];
+
+            // BT.601 整数近似。
+            target[x] =
+                static_cast<std::uint8_t>(
+                    (
+                        29U * b +
+                        150U * g +
+                        77U * r +
+                        128U
+                    ) >> 8U
+                );
         }
     }
-    Candidate candidate = recognizer_.recognize({gray.data(), static_cast<int>(frame.width), static_cast<int>(frame.height), static_cast<std::ptrdiff_t>(frame.width)});
-    auto* result = new RecognizedCandidate{std::move(candidate), timer_.elapsedMs(start, timer_.now())};
-    if (!PostMessageW(ui_.window(), kRecognizedCandidateMessage, 0, reinterpret_cast<LPARAM>(result))) delete result;
+
+    Candidate candidate =
+        recognizer_.recognize(
+            {
+                grayBuffer_.data(),
+                static_cast<int>(
+                    frame.width
+                ),
+                static_cast<int>(
+                    frame.height
+                ),
+                static_cast<std::ptrdiff_t>(
+                    frame.width
+                )
+            }
+        );
+
+    auto* result =
+        new RecognizedCandidate{
+            std::move(candidate),
+            timer_.elapsedMs(
+                start,
+                timer_.now()
+            )
+        };
+
+    if (!PostMessageW(
+            ui_.window(),
+            kRecognizedCandidateMessage,
+            0,
+            reinterpret_cast<LPARAM>(
+                result
+            ))) {
+
+        delete result;
+    }
 }
 
 void App::processRecognizedCandidate(Candidate candidate, double recognitionMs) {
