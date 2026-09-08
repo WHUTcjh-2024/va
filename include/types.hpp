@@ -20,6 +20,19 @@ struct Rect final {
     [[nodiscard]] bool valid() const noexcept { return width > 0 && height > 0; }
 };
 
+struct NormalizedRect final {
+    double x{};
+    double y{};
+    double width{};
+    double height{};
+
+    [[nodiscard]] bool valid() const noexcept {
+        constexpr double epsilon = 1e-6;
+        return x >= 0.0 && y >= 0.0 && width > 0.0 && height > 0.0 &&
+            x + width <= 1.0 + epsilon && y + height <= 1.0 + epsilon;
+    }
+};
+
 struct Point final {
     int x{};
     int y{};
@@ -29,7 +42,7 @@ enum class SubmitMode { Enter, ClickJoin };
 enum class RunState { Setup, Armed, Observing, Candidate, Confirmed, Stopped };
 
 struct RecognitionConfig final {
-    double scoreThreshold{0.85};
+    double scoreThreshold{0.79};
     double marginThreshold{0.08};
     double bboxTolerance{0.20};
     double backgroundThreshold{24.0};
@@ -37,6 +50,8 @@ struct RecognitionConfig final {
 
 struct Config final {
     std::wstring captureWindowTitle;
+    NormalizedRect normalizedRoi;
+    // Runtime pixel ROI resolved from normalizedRoi when START is pressed.
     Rect roi;
     RecognitionConfig recognition;
     Point inputPoint;
@@ -48,6 +63,7 @@ struct Config final {
 
 struct MatchResult final {
     char value{};
+    char secondValue{};
     float bestScore{};
     float secondScore{};
     float margin{};

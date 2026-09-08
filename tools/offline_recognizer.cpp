@@ -115,7 +115,8 @@ int wmain(int argc, wchar_t* argv[]) {
         const auto& result = candidate.slots[slot];
         std::cout << "Slot " << slot << ": best=" << result.value
                   << " score=" << result.bestScore
-                  << " second=" << result.secondScore
+                  << " second=" << result.secondValue
+                  << " secondScore=" << result.secondScore
                   << " margin=" << result.margin
                   << " x=" << result.xStart << '-' << result.xEnd
                   << " bbox=" << result.bboxWidth << 'x' << result.bboxHeight

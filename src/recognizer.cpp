@@ -44,8 +44,12 @@ struct Run final {
 struct Features final {
     std::array<float, kPixels> centered{};
     std::array<float, kPixels> edges{};
+    std::array<float, kCanvas> rowProjection{};
+    std::array<float, kCanvas> columnProjection{};
     float norm{};
     float edgeNorm{};
+    float rowNorm{};
+    float columnNorm{};
 };
 
 [[nodiscard]] bool allowedInSlot(int slot, char value) noexcept {
@@ -58,6 +62,26 @@ struct Features final {
     return value >= 'A' && value <= 'Z'
         ? value - 'A'
         : 26 + value - '0';
+}
+
+[[nodiscard]] bool ambiguityPair(char left, char right) noexcept {
+    const auto matches = [left, right](char first, char second) noexcept {
+        return (left == first && right == second) ||
+            (left == second && right == first);
+    };
+    return matches('K', 'X') || matches('B', 'R') ||
+        matches('D', 'B') || matches('D', 'O') ||
+        matches('D', 'U') || matches('P', 'F');
+}
+
+[[nodiscard]] bool requiresStrictMargin(const MatchResult& slot) noexcept {
+    if (ambiguityPair(slot.value, slot.secondValue)) {
+        return true;
+    }
+    const bool wideM = slot.value == 'M' &&
+        (slot.secondValue == 'N' || slot.secondValue == 'H') &&
+        slot.bboxWidth > slot.bboxHeight;
+    return wideM;
 }
 
 [[nodiscard]] int foregroundDelta(const RecognitionConfig& config) noexcept {
@@ -268,6 +292,8 @@ void normalizeGlyph(
             const float centered = static_cast<float>(pixels[index]) - mean;
             features.centered[index] = centered;
             normSquared += centered * centered;
+            features.rowProjection[y] += static_cast<float>(pixels[index]);
+            features.columnProjection[x] += static_cast<float>(pixels[index]);
 
             const int left = std::max(0, x - 1);
             const int right = std::min(kCanvas - 1, x + 1);
@@ -290,6 +316,15 @@ void normalizeGlyph(
     }
     features.norm = std::sqrt(normSquared);
     features.edgeNorm = std::sqrt(edgeNormSquared);
+    float rowNormSquared{};
+    float columnNormSquared{};
+    for (int index = 0; index < kCanvas; ++index) {
+        rowNormSquared += features.rowProjection[index] * features.rowProjection[index];
+        columnNormSquared +=
+            features.columnProjection[index] * features.columnProjection[index];
+    }
+    features.rowNorm = std::sqrt(rowNormSquared);
+    features.columnNorm = std::sqrt(columnNormSquared);
     return features;
 }
 
@@ -302,12 +337,26 @@ void normalizeGlyph(
     std::uint64_t difference{};
     float correlationDot{};
     float edgeDot{};
+    float rowDot{};
+    float columnDot{};
+    std::uint32_t intersection{};
+    std::uint32_t unionPixels{};
     for (std::size_t i = 0; i < kPixels; ++i) {
         difference += static_cast<unsigned>(std::abs(
             static_cast<int>(candidate[i]) - static_cast<int>(templ[i])
         ));
         correlationDot += candidateFeatures.centered[i] * templateFeatures.centered[i];
         edgeDot += candidateFeatures.edges[i] * templateFeatures.edges[i];
+        const bool candidateInk = candidate[i] > 32;
+        const bool templateInk = templ[i] > 32;
+        intersection += candidateInk && templateInk ? 1U : 0U;
+        unionPixels += candidateInk || templateInk ? 1U : 0U;
+    }
+    for (int index = 0; index < kCanvas; ++index) {
+        rowDot += candidateFeatures.rowProjection[index] *
+            templateFeatures.rowProjection[index];
+        columnDot += candidateFeatures.columnProjection[index] *
+            templateFeatures.columnProjection[index];
     }
 
     const float sad = 1.0F - static_cast<float>(difference) /
@@ -320,8 +369,19 @@ void normalizeGlyph(
     const float edge = edgeDenominator > 0.0F
         ? std::max(0.0F, edgeDot / edgeDenominator)
         : 0.0F;
+    const float overlap = unionPixels > 0
+        ? static_cast<float>(intersection) / static_cast<float>(unionPixels)
+        : 0.0F;
+    const float rowDenominator = candidateFeatures.rowNorm * templateFeatures.rowNorm;
+    const float columnDenominator =
+        candidateFeatures.columnNorm * templateFeatures.columnNorm;
+    const float projection = 0.5F * (
+        (rowDenominator > 0.0F ? rowDot / rowDenominator : 0.0F) +
+        (columnDenominator > 0.0F ? columnDot / columnDenominator : 0.0F)
+    );
     return std::clamp(
-        0.30F * sad + 0.45F * correlation + 0.25F * edge,
+        0.15F * sad + 0.30F * correlation + 0.15F * edge +
+            0.25F * overlap + 0.15F * projection,
         0.0F,
         1.0F
     );
@@ -404,6 +464,7 @@ Candidate Recognizer::recognize(const GrayImageView& roi) const {
         float bestScore = -std::numeric_limits<float>::infinity();
         float secondScore = -std::numeric_limits<float>::infinity();
         char bestValue{};
+        char secondValue{};
 
         for (const char value : generated::kGlyphValues) {
             if (value == '\0' || !allowedInSlot(slot, value)) {
@@ -424,11 +485,13 @@ Candidate Recognizer::recognize(const GrayImageView& roi) const {
             }
             if (characterBest > bestScore) {
                 secondScore = bestScore;
+                secondValue = bestValue;
                 bestScore = characterBest;
                 bestValue = value;
             }
             else if (characterBest > secondScore) {
                 secondScore = characterBest;
+                secondValue = value;
             }
         }
 
@@ -436,6 +499,7 @@ Candidate Recognizer::recognize(const GrayImageView& roi) const {
         const Run& run = runs[slot];
         candidate.slots[slot] = {
             bestValue,
+            secondValue,
             bestScore,
             safeSecond,
             bestScore - safeSecond,
@@ -494,13 +558,16 @@ bool Recognizer::shouldSubmit(
     }
 
     const double fallbackScore = std::max(0.0, config_.scoreThreshold - 0.03);
-    const double fallbackMargin = std::max(0.0, config_.marginThreshold * 0.075);
+    const double fallbackMargin = std::max(0.0, config_.marginThreshold * 0.125);
     return std::all_of(
         candidate.slots.begin(),
         candidate.slots.end(),
-        [fallbackScore, fallbackMargin](const MatchResult& slot) {
+        [this, fallbackScore, fallbackMargin](const MatchResult& slot) {
+            const double requiredMargin = requiresStrictMargin(slot)
+                ? std::max(fallbackMargin, config_.marginThreshold)
+                : fallbackMargin;
             return static_cast<double>(slot.bestScore) >= fallbackScore &&
-                static_cast<double>(slot.margin) >= fallbackMargin;
+                static_cast<double>(slot.margin) >= requiredMargin;
         }
     );
 }

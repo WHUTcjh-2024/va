@@ -25,10 +25,17 @@ add_executable(VALInviteOffline
     src/recognizer.cpp
 )
 
+add_executable(VALInviteRegression
+    tools/recognizer_regression.cpp
+    src/recognizer.cpp
+)
+
 target_include_directories(VALInvite PRIVATE include "${CMAKE_SOURCE_DIR}")
 target_include_directories(VALInviteOffline PRIVATE include "${CMAKE_SOURCE_DIR}")
+target_include_directories(VALInviteRegression PRIVATE include "${CMAKE_SOURCE_DIR}")
 target_compile_features(VALInvite PRIVATE cxx_std_20)
 target_compile_features(VALInviteOffline PRIVATE cxx_std_20)
+target_compile_features(VALInviteRegression PRIVATE cxx_std_20)
 target_compile_definitions(VALInvite PRIVATE
     UNICODE
     _UNICODE
@@ -36,6 +43,12 @@ target_compile_definitions(VALInvite PRIVATE
     NOMINMAX
 )
 target_compile_definitions(VALInviteOffline PRIVATE
+    UNICODE
+    _UNICODE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+)
+target_compile_definitions(VALInviteRegression PRIVATE
     UNICODE
     _UNICODE
     WIN32_LEAN_AND_MEAN
@@ -51,20 +64,12 @@ target_link_libraries(VALInvite PRIVATE
     shell32
 )
 
-add_custom_command(TARGET VALInvite POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/config.json"
-        "$<TARGET_FILE_DIR:VALInvite>/config.json"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/templates"
-        "$<TARGET_FILE_DIR:VALInvite>/templates"
-    COMMENT "Copying runtime configuration and recognition templates"
-)
-
 if (MSVC)
     target_compile_options(VALInvite PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
     target_compile_options(VALInviteOffline PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+    target_compile_options(VALInviteRegression PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
 else()
     target_compile_options(VALInvite PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(VALInviteOffline PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(VALInviteRegression PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
