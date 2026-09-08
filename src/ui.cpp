@@ -43,11 +43,232 @@ bool Ui::selectRoi(Rect& roi, std::wstring& error) {
     while (IsWindow(overlay)) { MSG message{}; while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { if (message.message == WM_QUIT) { PostQuitMessage(static_cast<int>(message.wParam)); break; } TranslateMessage(&message); DispatchMessageW(&message); } POINT cursor{}; GetCursorPos(&cursor); cursor.x -= left; cursor.y -= top; if ((GetAsyncKeyState(VK_ESCAPE) & 1) != 0) break; if (!drawing && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0) { points[0] = cursor; points[1] = cursor; drawing = true; SetWindowLongPtrW(overlay, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(points)); } if (drawing) { points[1] = cursor; InvalidateRect(overlay, nullptr, TRUE); if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) { accepted = std::abs(points[1].x - points[0].x) > 4 && std::abs(points[1].y - points[0].y) > 4; break; } } Sleep(8); }
     ReleaseCapture(); DestroyWindow(overlay); if (!accepted) { error = L"已取消 ROI 框选"; return false; } roi = {left + std::min(points[0].x, points[1].x), top + std::min(points[0].y, points[1].y), std::abs(points[1].x - points[0].x), std::abs(points[1].y - points[0].y)}; return true;
 }
-void Ui::update(RunState state, const Config& config, const TimingSnapshot& timing, const std::optional<Candidate>& candidate, std::wstring_view error) {
-    if (!window_) return; SetWindowTextW(window_, (std::wstring{L"VAL Invite V1 | "} + stateText(state)).c_str()); const std::wstring code = candidate ? std::wstring(candidate->code.begin(), candidate->code.end()) : L"-";
-    std::wstring status = std::wstring{L"状态："} + stateText(state) + L"\r\nROI：" + std::to_wstring(config.roi.x) + L", " + std::to_wstring(config.roi.y) + L"  " + std::to_wstring(config.roi.width) + L"×" + std::to_wstring(config.roi.height) + L"\r\nInput：" + std::to_wstring(config.inputPoint.x) + L", " + std::to_wstring(config.inputPoint.y) + L" [F8]  Join：" + std::to_wstring(config.joinPoint.x) + L", " + std::to_wstring(config.joinPoint.y) + L" [F9]" + L"\r\n识别码：" + code + L"  置信：" + (candidate && candidate->highConfidence ? L"高" : L"待确认") + L"\r\n耗时 Recognition " + std::to_wstring(timing.recognitionMs) + L" ms | Decision " + std::to_wstring(timing.decisionMs) + L" ms | SendInput " + std::to_wstring(timing.dispatchMs) + L" ms";
-    if (!error.empty()) status += L"\r\n提示：" + std::wstring(error); SetWindowTextW(status_, status.c_str()); EnableWindow(startButton_, state == RunState::Setup || state == RunState::Stopped); EnableWindow(stopButton_, state != RunState::Setup && state != RunState::Stopped);
-    if (config.roi.valid()) { HDC screen = GetDC(nullptr), memory = CreateCompatibleDC(screen); HBITMAP bitmap = CreateCompatibleBitmap(screen, 174, 114); HGDIOBJ old = SelectObject(memory, bitmap); BitBlt(memory, 0, 0, 174, 114, screen, config.roi.x, config.roi.y, SRCCOPY); SelectObject(memory, old); DeleteDC(memory); ReleaseDC(nullptr, screen); const auto oldBitmap = reinterpret_cast<HBITMAP>(SendMessageW(preview_, STM_SETIMAGE, IMAGE_BITMAP, reinterpret_cast<LPARAM>(bitmap))); if (oldBitmap) DeleteObject(oldBitmap); }
-}
-LRESULT CALLBACK Ui::windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) { if (message == WM_COMMAND && HIWORD(wParam) == BN_CLICKED) { const WORD id = LOWORD(wParam); WPARAM command = id == kStartButtonId ? kStartCommand : id == kStopButtonId ? kStopCommand : id == kRefreshButtonId ? kSelectWindowCommand : id == kRoiButtonId ? kSelectRoiCommand : 0; if (command) { PostMessageW(window, kCommandMessage, command, 0); return 0; } } if (message == WM_DESTROY) { PostQuitMessage(0); return 0; } return DefWindowProcW(window, message, wParam, lParam); }
-} // namespace valinvite
+void Ui::update(
+    RunState state,
+    const Config& config,
+    const TimingSnapshot& timing,
+    const std::optional<Candidate>& candidate,
+    std::wstring_view error
+) {
+    if (!window_) {
+        return;
+    }
+
+    SetWindowTextW(
+        window_,
+        (
+            std::wstring{
+                L"VAL Invite V1 | "
+            } +
+            stateText(state)
+        ).c_str()
+    );
+
+    const std::wstring code =
+        candidate
+            ? std::wstring(
+                candidate->code.begin(),
+                candidate->code.end()
+            )
+            : L"-";
+
+    std::wstring status =
+        std::wstring{L"状态："} +
+        stateText(state) +
+
+        L"\r\nROI：" +
+        std::to_wstring(config.roi.x) +
+        L", " +
+        std::to_wstring(config.roi.y) +
+        L"  " +
+        std::to_wstring(config.roi.width) +
+        L"×" +
+        std::to_wstring(config.roi.height) +
+
+        L"\r\nInput：" +
+        std::to_wstring(
+            config.inputPoint.x
+        ) +
+        L", " +
+        std::to_wstring(
+            config.inputPoint.y
+        ) +
+        L" [F8]  Join：" +
+        std::to_wstring(
+            config.joinPoint.x
+        ) +
+        L", " +
+        std::to_wstring(
+            config.joinPoint.y
+        ) +
+        L" [F9]" +
+
+        L"\r\n识别码：" +
+        code +
+
+        L"  置信：" +
+        (
+            candidate &&
+            candidate->highConfidence
+                ? L"高"
+                : L"待确认"
+        ) +
+
+        L"\r\n耗时 Recognition " +
+        std::to_wstring(
+            timing.recognitionMs
+        ) +
+        L" ms | Decision " +
+        std::to_wstring(
+            timing.decisionMs
+        ) +
+        L" ms | SendInput " +
+        std::to_wstring(
+            timing.dispatchMs
+        ) +
+        L" ms";
+
+    if (!error.empty()) {
+        status +=
+            L"\r\n提示：" +
+            std::wstring(error);
+    }
+
+    SetWindowTextW(
+        status_,
+        status.c_str()
+    );
+
+    EnableWindow(
+        startButton_,
+        state == RunState::Setup ||
+        state == RunState::Stopped
+    );
+
+    EnableWindow(
+        stopButton_,
+        state != RunState::Setup &&
+        state != RunState::Stopped
+    );
+
+    // Preview 只更新 10 FPS。
+    // 不允许每个识别帧都创建 GDI bitmap。
+    static ULONGLONG
+        lastPreviewTick = 0;
+
+    const ULONGLONG now =
+        GetTickCount64();
+
+    if (!config.roi.valid() ||
+        now - lastPreviewTick < 100) {
+        return;
+    }
+
+    const HWND sourceWindow =
+        selectedWindow();
+
+    if (!sourceWindow ||
+        !IsWindow(sourceWindow)) {
+        return;
+    }
+
+    POINT clientOrigin{0, 0};
+
+    if (!ClientToScreen(
+            sourceWindow,
+            &clientOrigin)) {
+        return;
+    }
+
+    const int sourceX =
+        clientOrigin.x +
+        config.roi.x;
+
+    const int sourceY =
+        clientOrigin.y +
+        config.roi.y;
+
+    HDC screen =
+        GetDC(nullptr);
+
+    if (!screen) {
+        return;
+    }
+
+    HDC memory =
+        CreateCompatibleDC(screen);
+
+    if (!memory) {
+        ReleaseDC(nullptr, screen);
+        return;
+    }
+
+    constexpr int previewWidth = 174;
+    constexpr int previewHeight = 114;
+
+    HBITMAP bitmap =
+        CreateCompatibleBitmap(
+            screen,
+            previewWidth,
+            previewHeight
+        );
+
+    if (!bitmap) {
+        DeleteDC(memory);
+        ReleaseDC(nullptr, screen);
+        return;
+    }
+
+    HGDIOBJ old =
+        SelectObject(
+            memory,
+            bitmap
+        );
+
+    SetStretchBltMode(
+        memory,
+        COLORONCOLOR
+    );
+
+    StretchBlt(
+        memory,
+        0,
+        0,
+        previewWidth,
+        previewHeight,
+
+        screen,
+        sourceX,
+        sourceY,
+        config.roi.width,
+        config.roi.height,
+
+        SRCCOPY
+    );
+
+    SelectObject(
+        memory,
+        old
+    );
+
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+
+    const auto oldBitmap =
+        reinterpret_cast<HBITMAP>(
+            SendMessageW(
+                preview_,
+                STM_SETIMAGE,
+                IMAGE_BITMAP,
+                reinterpret_cast<LPARAM>(
+                    bitmap
+                )
+            )
+        );
+
+    if (oldBitmap) {
+        DeleteObject(oldBitmap);
+    }
+
+    lastPreviewTick = now;
+}// namespace valinvite
