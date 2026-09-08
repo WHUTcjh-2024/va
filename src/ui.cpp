@@ -9,8 +9,12 @@ namespace {
 constexpr wchar_t kWindowClass[] = L"VALInviteWindow";
 constexpr wchar_t kRoiClass[] = L"VALInviteRoiPicker";
 constexpr int kStartButtonId = 1001, kStopButtonId = 1002, kRefreshButtonId = 1003, kRoiButtonId = 1004;
+struct WindowEnumerationContext final {
+    HWND combo{};
+    HWND excluded{};
+};
 const wchar_t* stateText(RunState state) noexcept { switch (state) { case RunState::Setup: return L"Setup"; case RunState::Armed: return L"Armed"; case RunState::Observing: return L"Observing"; case RunState::Candidate: return L"Candidate"; case RunState::Confirmed: return L"Confirmed"; case RunState::Stopped: return L"Stopped"; } return L"Unknown"; }
-BOOL CALLBACK addWindow(HWND window, LPARAM value) { auto combo = reinterpret_cast<HWND>(value); if (!IsWindowVisible(window) || GetWindow(window, GW_OWNER)) return TRUE; wchar_t title[256]{}; if (!GetWindowTextW(window, title, static_cast<int>(std::size(title)))) return TRUE; const auto index = SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(title)); if (index != CB_ERR && index != CB_ERRSPACE) SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(window)); return TRUE; }
+BOOL CALLBACK addWindow(HWND window, LPARAM value) { const auto& context = *reinterpret_cast<const WindowEnumerationContext*>(value); if (window == context.excluded || !IsWindowVisible(window) || GetWindow(window, GW_OWNER)) return TRUE; wchar_t title[256]{}; if (!GetWindowTextW(window, title, static_cast<int>(std::size(title)))) return TRUE; const auto index = SendMessageW(context.combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(title)); if (index != CB_ERR && index != CB_ERRSPACE) SendMessageW(context.combo, CB_SETITEMDATA, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(window)); return TRUE; }
 LRESULT CALLBACK roiProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) { if (message == WM_PAINT) { PAINTSTRUCT ps{}; HDC dc = BeginPaint(window, &ps); const auto* points = reinterpret_cast<const POINT*>(GetWindowLongPtrW(window, GWLP_USERDATA)); if (points) { HPEN pen = CreatePen(PS_SOLID, 2, RGB(40, 220, 180)); HGDIOBJ oldPen = SelectObject(dc, pen); HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH)); Rectangle(dc, points[0].x, points[0].y, points[1].x, points[1].y); SelectObject(dc, oldBrush); SelectObject(dc, oldPen); DeleteObject(pen); } EndPaint(window, &ps); return 0; } return DefWindowProcW(window, message, wParam, lParam); }
 } // namespace
 
@@ -22,7 +26,7 @@ bool Ui::create(HINSTANCE instance, std::wstring& error) {
     CreateWindowExW(0, L"STATIC", L"捕获窗口：", WS_CHILD | WS_VISIBLE, 18, 18, 88, 24, window_, nullptr, instance, nullptr);
     windowList_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST, 106, 15, 420, 300, window_, nullptr, instance, nullptr);
     CreateWindowExW(0, L"BUTTON", L"刷新窗口", WS_CHILD | WS_VISIBLE, 538, 15, 110, 26, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRefreshButtonId)), instance, nullptr);
-    roiButton_ = CreateWindowExW(0, L"BUTTON", L"框选 ROI", WS_CHILD | WS_VISIBLE, 18, 54, 120, 30, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRoiButtonId)), instance, nullptr);
+    roiButton_ = CreateWindowExW(0, L"BUTTON", L"框选所选窗口 ROI", WS_CHILD | WS_VISIBLE, 18, 54, 150, 30, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRoiButtonId)), instance, nullptr);
     preview_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"STATIC", L"ROI Preview", WS_CHILD | WS_VISIBLE | SS_BITMAP | SS_CENTERIMAGE, 470, 56, 178, 118, window_, nullptr, instance, nullptr);
     status_ = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 18, 98, 435, 235, window_, nullptr, instance, nullptr);
     startButton_ = CreateWindowExW(0, L"BUTTON", L"START (F10)", WS_CHILD | WS_VISIBLE, 18, 350, 120, 32, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStartButtonId)), instance, nullptr);
@@ -31,7 +35,24 @@ bool Ui::create(HINSTANCE instance, std::wstring& error) {
     ShowWindow(window_, SW_SHOW); UpdateWindow(window_); return true;
 }
 HWND Ui::window() const noexcept { return window_; }
-void Ui::refreshWindows() { SendMessageW(windowList_, CB_RESETCONTENT, 0, 0); EnumWindows(addWindow, reinterpret_cast<LPARAM>(windowList_)); if (SendMessageW(windowList_, CB_GETCOUNT, 0, 0) > 0) SendMessageW(windowList_, CB_SETCURSEL, 0, 0); }
+void Ui::refreshWindows() {
+    const HWND previous = selectedWindow();
+    SendMessageW(windowList_, CB_RESETCONTENT, 0, 0);
+    const WindowEnumerationContext context{windowList_, window_};
+    EnumWindows(addWindow, reinterpret_cast<LPARAM>(&context));
+    const auto count = SendMessageW(windowList_, CB_GETCOUNT, 0, 0);
+    LRESULT selection = count > 0 ? 0 : CB_ERR;
+    for (LRESULT index = 0; index < count; ++index) {
+        const auto candidate = reinterpret_cast<HWND>(
+            SendMessageW(windowList_, CB_GETITEMDATA, static_cast<WPARAM>(index), 0)
+        );
+        if (candidate == previous) {
+            selection = index;
+            break;
+        }
+    }
+    if (selection != CB_ERR) SendMessageW(windowList_, CB_SETCURSEL, static_cast<WPARAM>(selection), 0);
+}
 HWND Ui::selectedWindow() const noexcept { const auto index = SendMessageW(windowList_, CB_GETCURSEL, 0, 0); return index == CB_ERR ? nullptr : reinterpret_cast<HWND>(SendMessageW(windowList_, CB_GETITEMDATA, static_cast<WPARAM>(index), 0)); }
 bool Ui::selectRoi(Rect& roi, std::wstring& error) {
     WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = roiProc; wc.hInstance = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(window_, GWLP_HINSTANCE)); wc.hCursor = LoadCursor(nullptr, IDC_CROSS); wc.lpszClassName = kRoiClass;
