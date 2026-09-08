@@ -73,7 +73,7 @@ int App::run() {
             if (message.wParam == Ui::kSelectWindowCommand) ui_.refreshWindows();
             if (message.wParam == Ui::kSelectRoiCommand) {
                 std::wstring roiError;
-                if (ui_.selectRoi(config_.roi, roiError)) persistCalibration();
+                if (calibrator_.selectRoi(config_, ui_.selectedWindow(), roiError)) persistCalibration();
                 else if (!roiError.empty()) reportWarning(roiError);
                 ui_.update(state_, config_, timing_, std::nullopt, lastError_);
             }
