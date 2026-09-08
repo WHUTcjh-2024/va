@@ -134,6 +134,12 @@ void Ui::update(
             std::wstring(error);
     }
 
+    if (state == RunState::Setup ||
+        state == RunState::Stopped) {
+        status +=
+            L"\r\n\r\n提示：请尽量只框住六码文字，四周保留少量边距。";
+    }
+
     SetWindowTextW(
         status_,
         status.c_str()
@@ -271,4 +277,26 @@ void Ui::update(
     }
 
     lastPreviewTick = now;
-}// namespace valinvite
+}
+
+LRESULT CALLBACK Ui::windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == WM_COMMAND && HIWORD(wParam) == BN_CLICKED) {
+        const WORD id = LOWORD(wParam);
+        WPARAM command =
+            id == kStartButtonId ? kStartCommand :
+            id == kStopButtonId ? kStopCommand :
+            id == kRefreshButtonId ? kSelectWindowCommand :
+            id == kRoiButtonId ? kSelectRoiCommand : 0;
+        if (command) {
+            PostMessageW(window, kCommandMessage, command, 0);
+            return 0;
+        }
+    }
+    if (message == WM_DESTROY) {
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
+} // namespace valinvite
