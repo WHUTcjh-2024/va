@@ -40,7 +40,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("width", type=int)
     parser.add_argument("height", type=int)
     parser.add_argument("--exe", type=Path, help="VALInviteOffline executable")
-    parser.add_argument("--templates", type=Path, help="VIT1 template root")
     return parser.parse_args()
 
 
@@ -79,8 +78,6 @@ def main() -> int:
 
     root = Path(__file__).resolve().parent.parent
     executable = find_executable(root, args.exe)
-    templates = (args.templates or root / "templates").resolve()
-
     with Image.open(args.screenshot) as image:
         right = args.x + args.width
         bottom = args.y + args.height
@@ -109,7 +106,6 @@ def main() -> int:
                 str(args.width),
                 str(args.height),
                 args.expected,
-                str(templates),
             ],
             check=False,
         )

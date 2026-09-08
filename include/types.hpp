@@ -51,6 +51,8 @@ struct MatchResult final {
     float bestScore{};
     float secondScore{};
     float margin{};
+    int xStart{};
+    int xEnd{};
     int bboxWidth{};
     int bboxHeight{};
 };

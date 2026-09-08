@@ -1,5 +1,7 @@
 #include "recognizer.hpp"
 
+#include "generated/glyph_templates.hpp"
+
 #ifdef min
 #undef min
 #endif
@@ -10,41 +12,41 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdlib>
-#include <fstream>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
-#include <string>
-
-#include <intrin.h>
-
-#if defined(_M_X64) || defined(_M_IX86)
-#include <immintrin.h>
-#endif
+#include <memory>
 
 namespace valinvite {
 namespace {
 
-constexpr std::array<char, 36> kAlphabet{
-    'A','B','C','D','E','F','G','H','I','J','K','L','M',
-    'N','O','P','Q','R','S','T','U','V','W','X','Y','Z',
-    '0','1','2','3','4','5','6','7','8','9'
+constexpr int kCanvas = generated::kGlyphCanvas;
+constexpr int kContent = generated::kGlyphContent;
+constexpr std::size_t kPixels = static_cast<std::size_t>(kCanvas) * kCanvas;
+constexpr int kRequiredGlyphs = 6;
+constexpr int kProbeColumns = 2;
+constexpr int kMinimumColumnPixels = 2;
+constexpr int kMinimumRunWidth = 2;
+constexpr int kMinimumRunPixels = 8;
+constexpr int kMinimumGlyphHeight = 4;
+
+static_assert(generated::kGlyphCount == 36);
+static_assert(generated::kVariantsPerGlyph >= 3);
+static_assert(kCanvas == 32);
+
+struct Run final {
+    int left{};
+    int right{};
+    int top{};
+    int bottom{};
 };
 
-constexpr std::array<char, 4> kTemplateMagic{'V', 'I', 'T', '1'};
-
-constexpr int kTemplateWidth = 32;
-constexpr int kTemplateHeight = 32;
-constexpr std::size_t kTemplatePixels =
-    static_cast<std::size_t>(kTemplateWidth) * kTemplateHeight;
-
-constexpr int kProbeColumns = 2;
-
-// A slot "has ink" when its measured bounding box (on the normalized 32x32
-// content) clears a small absolute floor. A blank/no-code ROI yields ~0 for
-// every slot even though the recognizer still hard-selects six characters.
-constexpr int kInkMinWidth = 3;
-constexpr int kInkMinHeight = 8;
-constexpr int kInkSlotsRequired = 4;
+struct Features final {
+    std::array<float, kPixels> centered{};
+    std::array<float, kPixels> edges{};
+    float norm{};
+    float edgeNorm{};
+};
 
 [[nodiscard]] bool allowedInSlot(int slot, char value) noexcept {
     return slot < 3
@@ -52,898 +54,455 @@ constexpr int kInkSlotsRequired = 4;
         : value >= '0' && value <= '9';
 }
 
-[[nodiscard]] std::uint16_t readU16(std::istream& stream) {
-    std::array<unsigned char, 2> bytes{};
-    stream.read(
-        reinterpret_cast<char*>(bytes.data()),
-        static_cast<std::streamsize>(bytes.size())
+[[nodiscard]] int templateIndex(char value) noexcept {
+    return value >= 'A' && value <= 'Z'
+        ? value - 'A'
+        : 26 + value - '0';
+}
+
+[[nodiscard]] int foregroundDelta(const RecognitionConfig& config) noexcept {
+    return std::max(
+        32,
+        static_cast<int>(std::lround(config.backgroundThreshold + 8.0))
     );
-
-    return static_cast<std::uint16_t>(
-        bytes[0] |
-        (static_cast<std::uint16_t>(bytes[1]) << 8)
-    );
 }
 
-[[nodiscard]] std::uint64_t sadScalar(
-    const std::uint8_t* image,
-    const std::uint8_t* templ,
-    std::size_t count
-) noexcept {
-    std::uint64_t total{};
+[[nodiscard]] std::uint8_t estimateBackground(const GrayImageView& roi) noexcept {
+    std::array<std::uint32_t, 256> histogram{};
+    std::uint32_t samples{};
+    const auto add = [&histogram, &samples](std::uint8_t value) noexcept {
+        ++histogram[value];
+        ++samples;
+    };
 
-    for (std::size_t i = 0; i < count; ++i) {
-        total += static_cast<unsigned>(
-            std::abs(
-                static_cast<int>(image[i]) -
-                static_cast<int>(templ[i])
-            )
-        );
+    const auto* top = roi.pixels;
+    const auto* bottom =
+        roi.pixels + static_cast<std::ptrdiff_t>(roi.height - 1) * roi.stride;
+    for (int x = 0; x < roi.width; ++x) {
+        add(top[x]);
+        if (roi.height > 1) {
+            add(bottom[x]);
+        }
+    }
+    for (int y = 1; y + 1 < roi.height; ++y) {
+        const auto* row = roi.pixels + static_cast<std::ptrdiff_t>(y) * roi.stride;
+        add(row[0]);
+        if (roi.width > 1) {
+            add(row[roi.width - 1]);
+        }
     }
 
-    return total;
+    const std::uint32_t middle = samples / 2;
+    std::uint32_t accumulated{};
+    for (std::size_t value = 0; value < histogram.size(); ++value) {
+        accumulated += histogram[value];
+        if (accumulated > middle) {
+            return static_cast<std::uint8_t>(value);
+        }
+    }
+    return 0;
 }
 
-#if defined(_M_X64) || defined(_M_IX86)
-
-[[nodiscard]] std::uint64_t sadAvx2(
-    const std::uint8_t* image,
-    const std::uint8_t* templ,
-    std::size_t count
-) noexcept {
-    std::size_t i{};
-    __m256i accumulator = _mm256_setzero_si256();
-
-    for (; i + 32 <= count; i += 32) {
-        const __m256i a = _mm256_loadu_si256(
-            reinterpret_cast<const __m256i*>(image + i)
-        );
-
-        const __m256i b = _mm256_loadu_si256(
-            reinterpret_cast<const __m256i*>(templ + i)
-        );
-
-        const __m256i sad = _mm256_sad_epu8(a, b);
-
-        accumulator = _mm256_add_epi64(
-            accumulator,
-            sad
-        );
-    }
-
-    alignas(32) std::array<std::uint64_t, 4> lanes{};
-
-    _mm256_store_si256(
-        reinterpret_cast<__m256i*>(lanes.data()),
-        accumulator
-    );
-
-    std::uint64_t total =
-        lanes[0] + lanes[1] + lanes[2] + lanes[3];
-
-    if (i < count) {
-        total += sadScalar(
-            image + i,
-            templ + i,
-            count - i
-        );
-    }
-
-    return total;
+[[nodiscard]] int pixelDelta(std::uint8_t value, std::uint8_t background) noexcept {
+    return std::abs(static_cast<int>(value) - static_cast<int>(background));
 }
 
-#endif
-
-[[nodiscard]] bool cpuHasAvx2() noexcept {
-#if defined(_M_X64) || defined(_M_IX86)
-    int info[4]{};
-
-    __cpuidex(info, 0, 0);
-
-    if (info[0] < 7) {
-        return false;
-    }
-
-    __cpuidex(info, 1, 0);
-
-    if ((info[2] & (1 << 27)) == 0 ||
-        (info[2] & (1 << 28)) == 0) {
-        return false;
-    }
-
-    if ((_xgetbv(0) & 0x6U) != 0x6U) {
-        return false;
-    }
-
-    __cpuidex(info, 7, 0);
-
-    return (info[1] & (1 << 5)) != 0;
-#else
-    return false;
-#endif
-}
-
-void normalizeSlot(
+[[nodiscard]] bool inspectRun(
     const GrayImageView& roi,
     int left,
     int right,
-    std::array<std::uint8_t, kTemplatePixels>& output
+    std::uint8_t background,
+    int threshold,
+    Run& run
 ) noexcept {
-    const int sourceWidth = right - left;
-
-    for (int y = 0; y < kTemplateHeight; ++y) {
-        const int sourceY = std::min(
-            roi.height - 1,
-            (y * roi.height) / kTemplateHeight
-        );
-
-        const auto* sourceRow =
-            roi.pixels +
-            static_cast<std::ptrdiff_t>(sourceY) * roi.stride +
-            left;
-
-        auto* targetRow =
-            output.data() +
-            static_cast<std::size_t>(y) * kTemplateWidth;
-
-        for (int x = 0; x < kTemplateWidth; ++x) {
-            const int sourceX = std::min(
-                sourceWidth - 1,
-                (x * sourceWidth) / kTemplateWidth
-            );
-
-            targetRow[x] = sourceRow[sourceX];
+    int top = roi.height;
+    int bottom = -1;
+    int pixels = 0;
+    for (int y = 0; y < roi.height; ++y) {
+        const auto* row = roi.pixels + static_cast<std::ptrdiff_t>(y) * roi.stride;
+        for (int x = left; x <= right; ++x) {
+            if (pixelDelta(row[x], background) <= threshold) {
+                continue;
+            }
+            top = std::min(top, y);
+            bottom = std::max(bottom, y);
+            ++pixels;
         }
     }
+
+    const int width = right - left + 1;
+    const int height = bottom >= top ? bottom - top + 1 : 0;
+    if (width < kMinimumRunWidth || height < kMinimumGlyphHeight ||
+        pixels < kMinimumRunPixels) {
+        return false;
+    }
+    run = {left, right, top, bottom};
+    return true;
+}
+
+[[nodiscard]] int segmentRuns(
+    const GrayImageView& roi,
+    std::uint8_t background,
+    int threshold,
+    std::array<Run, kRequiredGlyphs>& output
+) noexcept {
+    int outputCount = 0;
+    int start = -1;
+
+    const auto finish = [&](int right) noexcept -> bool {
+        if (start < 0) {
+            return true;
+        }
+        Run run{};
+        if (inspectRun(roi, start, right, background, threshold, run)) {
+            if (outputCount >= kRequiredGlyphs) {
+                return false;
+            }
+            output[outputCount++] = run;
+        }
+        return true;
+    };
+
+    for (int x = 0; x < roi.width; ++x) {
+        int foregroundPixels = 0;
+        for (int y = 0; y < roi.height; ++y) {
+            const auto value = roi.pixels[
+                static_cast<std::ptrdiff_t>(y) * roi.stride + x
+            ];
+            if (pixelDelta(value, background) > threshold) {
+                ++foregroundPixels;
+            }
+        }
+
+        const bool active = foregroundPixels >= kMinimumColumnPixels;
+        if (active && start < 0) {
+            start = x;
+        }
+        else if (!active && start >= 0) {
+            if (!finish(x - 1)) {
+                return outputCount + 1;
+            }
+            start = -1;
+        }
+    }
+    if (start >= 0 && !finish(roi.width - 1)) {
+        return outputCount + 1;
+    }
+    return outputCount;
+}
+
+void normalizeGlyph(
+    const GrayImageView& roi,
+    const Run& run,
+    std::uint8_t background,
+    int threshold,
+    std::array<std::uint8_t, kPixels>& output
+) noexcept {
+    output.fill(0);
+    const int sourceWidth = run.right - run.left + 1;
+    const int sourceHeight = run.bottom - run.top + 1;
+    const float scale = std::min(
+        static_cast<float>(kContent) / static_cast<float>(sourceWidth),
+        static_cast<float>(kContent) / static_cast<float>(sourceHeight)
+    );
+    const int targetWidth = std::max(
+        1,
+        static_cast<int>(std::lround(static_cast<float>(sourceWidth) * scale))
+    );
+    const int targetHeight = std::max(
+        1,
+        static_cast<int>(std::lround(static_cast<float>(sourceHeight) * scale))
+    );
+    const int targetLeft = (kCanvas - targetWidth) / 2;
+    const int targetTop = (kCanvas - targetHeight) / 2;
+
+    const auto sample = [&](int x, int y) noexcept -> float {
+        const auto value = roi.pixels[
+            static_cast<std::ptrdiff_t>(run.top + y) * roi.stride + run.left + x
+        ];
+        const int delta = pixelDelta(value, background);
+        return delta > threshold ? static_cast<float>(delta) : 0.0F;
+    };
+
+    for (int y = 0; y < targetHeight; ++y) {
+        const float sourceY =
+            (static_cast<float>(y) + 0.5F) * static_cast<float>(sourceHeight) /
+                static_cast<float>(targetHeight) - 0.5F;
+        const int y0 = std::clamp(
+            static_cast<int>(std::floor(sourceY)), 0, sourceHeight - 1
+        );
+        const int y1 = std::min(sourceHeight - 1, y0 + 1);
+        const float fy = std::clamp(sourceY - static_cast<float>(y0), 0.0F, 1.0F);
+
+        for (int x = 0; x < targetWidth; ++x) {
+            const float sourceX =
+                (static_cast<float>(x) + 0.5F) * static_cast<float>(sourceWidth) /
+                    static_cast<float>(targetWidth) - 0.5F;
+            const int x0 = std::clamp(
+                static_cast<int>(std::floor(sourceX)), 0, sourceWidth - 1
+            );
+            const int x1 = std::min(sourceWidth - 1, x0 + 1);
+            const float fx = std::clamp(sourceX - static_cast<float>(x0), 0.0F, 1.0F);
+            const float top = sample(x0, y0) * (1.0F - fx) + sample(x1, y0) * fx;
+            const float bottom = sample(x0, y1) * (1.0F - fx) + sample(x1, y1) * fx;
+            const float value = top * (1.0F - fy) + bottom * fy;
+            output[static_cast<std::size_t>(targetTop + y) * kCanvas + targetLeft + x] =
+                static_cast<std::uint8_t>(std::clamp(std::lround(value), 0L, 255L));
+        }
+    }
+}
+
+[[nodiscard]] Features makeFeatures(const std::uint8_t* pixels) noexcept {
+    Features features{};
+    float mean{};
+    for (std::size_t i = 0; i < kPixels; ++i) {
+        mean += static_cast<float>(pixels[i]);
+    }
+    mean /= static_cast<float>(kPixels);
+
+    float normSquared{};
+    float edgeNormSquared{};
+    for (int y = 0; y < kCanvas; ++y) {
+        for (int x = 0; x < kCanvas; ++x) {
+            const std::size_t index = static_cast<std::size_t>(y) * kCanvas + x;
+            const float centered = static_cast<float>(pixels[index]) - mean;
+            features.centered[index] = centered;
+            normSquared += centered * centered;
+
+            const int left = std::max(0, x - 1);
+            const int right = std::min(kCanvas - 1, x + 1);
+            const int top = std::max(0, y - 1);
+            const int bottom = std::min(kCanvas - 1, y + 1);
+            const float dx = static_cast<float>(
+                pixels[static_cast<std::size_t>(y) * kCanvas + right]
+            ) - static_cast<float>(
+                pixels[static_cast<std::size_t>(y) * kCanvas + left]
+            );
+            const float dy = static_cast<float>(
+                pixels[static_cast<std::size_t>(bottom) * kCanvas + x]
+            ) - static_cast<float>(
+                pixels[static_cast<std::size_t>(top) * kCanvas + x]
+            );
+            const float edge = std::hypot(dx, dy);
+            features.edges[index] = edge;
+            edgeNormSquared += edge * edge;
+        }
+    }
+    features.norm = std::sqrt(normSquared);
+    features.edgeNorm = std::sqrt(edgeNormSquared);
+    return features;
+}
+
+[[nodiscard]] float similarity(
+    const std::array<std::uint8_t, kPixels>& candidate,
+    const Features& candidateFeatures,
+    const std::uint8_t* templ,
+    const Features& templateFeatures
+) noexcept {
+    std::uint64_t difference{};
+    float correlationDot{};
+    float edgeDot{};
+    for (std::size_t i = 0; i < kPixels; ++i) {
+        difference += static_cast<unsigned>(std::abs(
+            static_cast<int>(candidate[i]) - static_cast<int>(templ[i])
+        ));
+        correlationDot += candidateFeatures.centered[i] * templateFeatures.centered[i];
+        edgeDot += candidateFeatures.edges[i] * templateFeatures.edges[i];
+    }
+
+    const float sad = 1.0F - static_cast<float>(difference) /
+        static_cast<float>(255ULL * kPixels);
+    const float correlationDenominator = candidateFeatures.norm * templateFeatures.norm;
+    const float edgeDenominator = candidateFeatures.edgeNorm * templateFeatures.edgeNorm;
+    const float correlation = correlationDenominator > 0.0F
+        ? std::max(0.0F, correlationDot / correlationDenominator)
+        : 0.0F;
+    const float edge = edgeDenominator > 0.0F
+        ? std::max(0.0F, edgeDot / edgeDenominator)
+        : 0.0F;
+    return std::clamp(
+        0.30F * sad + 0.45F * correlation + 0.25F * edge,
+        0.0F,
+        1.0F
+    );
+}
+
+[[nodiscard]] bool backgroundProbe(
+    const GrayImageView& roi,
+    std::uint8_t background,
+    double threshold
+) noexcept {
+    std::uint64_t difference{};
+    std::uint64_t samples{};
+    const int columns = std::min(kProbeColumns, roi.width);
+    for (int y = 0; y < roi.height; ++y) {
+        const auto* row = roi.pixels + static_cast<std::ptrdiff_t>(y) * roi.stride;
+        for (int x = 0; x < columns; ++x) {
+            difference += static_cast<unsigned>(pixelDelta(row[x], background));
+            ++samples;
+        }
+        for (int x = std::max(columns, roi.width - columns); x < roi.width; ++x) {
+            difference += static_cast<unsigned>(pixelDelta(row[x], background));
+            ++samples;
+        }
+    }
+    return samples > 0 &&
+        static_cast<double>(difference) / static_cast<double>(samples) <= threshold;
 }
 
 } // namespace
 
+struct Recognizer::Impl final {
+    std::array<
+        std::array<Features, generated::kVariantsPerGlyph>,
+        generated::kGlyphCount
+    > features{};
+
+    Impl() noexcept {
+        for (std::size_t glyph = 0; glyph < generated::kGlyphCount; ++glyph) {
+            for (std::size_t variant = 0; variant < generated::kVariantsPerGlyph; ++variant) {
+                features[glyph][variant] = makeFeatures(
+                    generated::kGlyphTemplates[glyph][variant]
+                );
+            }
+        }
+    }
+};
 
 Recognizer::Recognizer()
-    : avx2Available_{cpuHasAvx2()} {
+    : impl_{std::make_unique<Impl>()} {
 }
 
 Recognizer::~Recognizer() = default;
 
-
-bool Recognizer::loadTemplates(
-    const std::filesystem::path& directory,
-    std::wstring& error
-) {
-    std::array<std::vector<Template>, 36> loaded{};
-
-    std::error_code filesystemError;
-
-    if (!std::filesystem::is_directory(
-            directory,
-            filesystemError)) {
-        error = L"模板目录不存在：" + directory.wstring();
-        return false;
-    }
-
-    for (std::size_t index = 0;
-         index < kAlphabet.size();
-         ++index) {
-
-        const auto characterDirectory =
-            directory / std::string(1, kAlphabet[index]);
-
-        if (!std::filesystem::is_directory(
-                characterDirectory,
-                filesystemError)) {
-            error =
-                L"缺少模板目录：" +
-                characterDirectory.wstring();
-            return false;
-        }
-
-        for (const auto& entry :
-             std::filesystem::directory_iterator(
-                 characterDirectory,
-                 filesystemError)) {
-
-            if (filesystemError) {
-                break;
-            }
-
-            if (!entry.is_regular_file() ||
-                entry.path().extension() != L".bin") {
-                continue;
-            }
-
-            std::ifstream file{
-                entry.path(),
-                std::ios::binary
-            };
-
-            std::array<char, 4> magic{};
-
-            file.read(
-                magic.data(),
-                static_cast<std::streamsize>(magic.size())
-            );
-
-            if (!file || magic != kTemplateMagic) {
-                error =
-                    L"模板格式错误：" +
-                    entry.path().wstring();
-                return false;
-            }
-
-            const int format = file.peek();
-
-            int width{};
-            int height{};
-            int bboxX{};
-            int bboxY{};
-            int bboxWidth{};
-            int bboxHeight{};
-
-            char value{};
-            std::uint8_t background{};
-
-            const bool textFormat = format == '\n';
-
-            if (textFormat) {
-                file.get();
-
-                int backgroundValue{};
-
-                file >>
-                    width >>
-                    height >>
-                    bboxX >>
-                    bboxY >>
-                    bboxWidth >>
-                    bboxHeight >>
-                    value >>
-                    backgroundValue;
-
-                if (backgroundValue < 0 ||
-                    backgroundValue > 255) {
-                    error =
-                        L"模板背景灰度无效：" +
-                        entry.path().wstring();
-                    return false;
-                }
-
-                background =
-                    static_cast<std::uint8_t>(
-                        backgroundValue
-                    );
-
-                file.ignore(
-                    std::numeric_limits<
-                        std::streamsize
-                    >::max(),
-                    '\n'
-                );
-            }
-            else {
-                width = readU16(file);
-                height = readU16(file);
-
-                bboxX = readU16(file);
-                bboxY = readU16(file);
-
-                bboxWidth = readU16(file);
-                bboxHeight = readU16(file);
-
-                file.read(&value, 1);
-
-                file.read(
-                    reinterpret_cast<char*>(&background),
-                    1
-                );
-            }
-
-            if (!file ||
-                value != kAlphabet[index] ||
-                width != kTemplateWidth ||
-                height != kTemplateHeight ||
-                bboxX < 0 ||
-                bboxY < 0 ||
-                bboxWidth <= 0 ||
-                bboxHeight <= 0 ||
-                bboxX + bboxWidth > width ||
-                bboxY + bboxHeight > height) {
-
-                error =
-                    L"模板必须为 32x32，且头信息有效：" +
-                    entry.path().wstring();
-
-                return false;
-            }
-
-            Template templ{
-                value,
-                width,
-                height,
-                bboxX,
-                bboxY,
-                bboxWidth,
-                bboxHeight,
-                background,
-                std::vector<std::uint8_t>(
-                    kTemplatePixels
-                )
-            };
-
-            if (textFormat) {
-                std::size_t pixel{};
-                char marker{};
-
-                while (pixel < templ.pixels.size() &&
-                       file.get(marker)) {
-
-                    if (marker == '#') {
-                        templ.pixels[pixel++] = 235;
-                    }
-                    else if (marker == '.') {
-                        templ.pixels[pixel++] =
-                            background;
-                    }
-                }
-
-                if (pixel != templ.pixels.size()) {
-                    error =
-                        L"模板像素数据不完整：" +
-                        entry.path().wstring();
-                    return false;
-                }
-            }
-            else {
-                file.read(
-                    reinterpret_cast<char*>(
-                        templ.pixels.data()
-                    ),
-                    static_cast<std::streamsize>(
-                        templ.pixels.size()
-                    )
-                );
-
-                if (!file) {
-                    error =
-                        L"模板像素数据不完整：" +
-                        entry.path().wstring();
-                    return false;
-                }
-            }
-
-            loaded[index].push_back(
-                std::move(templ)
-            );
-
-            if (loaded[index].size() > 8) {
-                error =
-                    L"每个字符最多允许 8 个模板：" +
-                    characterDirectory.wstring();
-                return false;
-            }
-        }
-
-        if (filesystemError ||
-            loaded[index].empty()) {
-
-            error = filesystemError
-                ? L"无法枚举模板：" +
-                    characterDirectory.wstring()
-                : L"缺少模板文件：" +
-                    characterDirectory.wstring();
-
-            return false;
-        }
-    }
-
-    templates_ = std::move(loaded);
-
-    error.clear();
-
-    return true;
-}
-
-
-void Recognizer::setConfig(
-    const RecognitionConfig& config
-) noexcept {
+void Recognizer::setConfig(const RecognitionConfig& config) noexcept {
     config_ = config;
 }
 
-
-bool Recognizer::usingAvx2() const noexcept {
-    return avx2Available_;
-}
-
-
 bool Recognizer::ready() const noexcept {
-    return std::all_of(
-        templates_.begin(),
-        templates_.end(),
-        [](const auto& entries) {
-            return !entries.empty();
-        }
-    );
+    return impl_ != nullptr;
 }
 
-
-Candidate Recognizer::recognize(
-    const GrayImageView& roi
-) const {
+Candidate Recognizer::recognize(const GrayImageView& roi) const {
     Candidate candidate{};
-
-    if (!roi.valid() ||
-        !ready() ||
-        roi.width < 6) {
+    if (!roi.valid() || !ready() || roi.width < kRequiredGlyphs || roi.height < 1) {
         return candidate;
     }
 
-    bool allBoxes = true;
-    bool edgeBoxes = true;
+    const std::uint8_t background = estimateBackground(roi);
+    const int threshold = foregroundDelta(config_);
+    std::array<Run, kRequiredGlyphs> runs{};
+    if (segmentRuns(roi, background, threshold, runs) != kRequiredGlyphs) {
+        return candidate;
+    }
+
     bool allScores = true;
-    bool probeOk = true;
+    std::array<std::uint8_t, kPixels> normalized{};
+    for (int slot = 0; slot < kRequiredGlyphs; ++slot) {
+        normalizeGlyph(roi, runs[slot], background, threshold, normalized);
+        const Features candidateFeatures = makeFeatures(normalized.data());
+        float bestScore = -std::numeric_limits<float>::infinity();
+        float secondScore = -std::numeric_limits<float>::infinity();
+        char bestValue{};
 
-    std::array<
-        std::uint8_t,
-        kTemplatePixels
-    > normalizedSlot{};
-
-    for (int slot = 0;
-         slot < 6;
-         ++slot) {
-
-        const int left =
-            (roi.width * slot) / 6;
-
-        const int right =
-            (roi.width * (slot + 1)) / 6;
-
-        if (right <= left) {
-            return Candidate{};
-        }
-
-        normalizeSlot(
-            roi,
-            left,
-            right,
-            normalizedSlot
-        );
-
-        float bestScore =
-            -std::numeric_limits<float>::infinity();
-
-        float secondScore =
-            -std::numeric_limits<float>::infinity();
-
-        const Template* bestTemplate{};
-
-        for (int templateId = 0;
-             templateId <
-                static_cast<int>(
-                    kAlphabet.size()
-                );
-             ++templateId) {
-
-            if (!allowedInSlot(
-                    slot,
-                    kAlphabet[templateId])) {
+        for (const char value : generated::kGlyphValues) {
+            if (value == '\0' || !allowedInSlot(slot, value)) {
                 continue;
             }
-
-            float characterBest =
-                -std::numeric_limits<
-                    float
-                >::infinity();
-
-            const Template*
-                characterTemplate{};
-
-            for (const Template& templ :
-                 templates_[templateId]) {
-
-                std::uint64_t difference{};
-
-#if defined(_M_X64) || defined(_M_IX86)
-                if (avx2Available_) {
-                    difference = sadAvx2(
-                        normalizedSlot.data(),
-                        templ.pixels.data(),
-                        kTemplatePixels
-                    );
-                }
-                else
-#endif
-                {
-                    difference = sadScalar(
-                        normalizedSlot.data(),
-                        templ.pixels.data(),
-                        kTemplatePixels
-                    );
-                }
-
-                const float score =
-                    1.0F -
-                    static_cast<float>(
-                        difference
-                    ) /
-                    static_cast<float>(
-                        255ULL *
-                        kTemplatePixels
-                    );
-
-                if (score > characterBest) {
-                    characterBest = score;
-                    characterTemplate = &templ;
-                }
+            const int glyph = templateIndex(value);
+            float characterBest = -std::numeric_limits<float>::infinity();
+            for (std::size_t variant = 0; variant < generated::kVariantsPerGlyph; ++variant) {
+                characterBest = std::max(
+                    characterBest,
+                    similarity(
+                        normalized,
+                        candidateFeatures,
+                        generated::kGlyphTemplates[glyph][variant],
+                        impl_->features[glyph][variant]
+                    )
+                );
             }
-
             if (characterBest > bestScore) {
                 secondScore = bestScore;
                 bestScore = characterBest;
-                bestTemplate =
-                    characterTemplate;
+                bestValue = value;
             }
-            else if (
-                characterBest >
-                secondScore) {
-
-                secondScore =
-                    characterBest;
+            else if (characterBest > secondScore) {
+                secondScore = characterBest;
             }
         }
 
-        if (bestTemplate == nullptr) {
-            return Candidate{};
-        }
-
-        int minX = kTemplateWidth;
-        int minY = kTemplateHeight;
-
-        int maxX = -1;
-        int maxY = -1;
-
-        const int foregroundDelta =
-            std::max(
-                12,
-                static_cast<int>(
-                    std::lround(
-                        config_
-                            .backgroundThreshold /
-                        2.0
-                    )
-                )
-            );
-
-        for (int y = 0;
-             y < kTemplateHeight;
-             ++y) {
-
-            const auto* row =
-                normalizedSlot.data() +
-                static_cast<std::size_t>(y) *
-                    kTemplateWidth;
-
-            for (int x = 0;
-                 x < kTemplateWidth;
-                 ++x) {
-
-                if (std::abs(
-                        static_cast<int>(row[x]) -
-                        static_cast<int>(
-                            bestTemplate->background
-                        )
-                    ) > foregroundDelta) {
-
-                    minX = std::min(minX, x);
-                    minY = std::min(minY, y);
-
-                    maxX = std::max(maxX, x);
-                    maxY = std::max(maxY, y);
-                }
-            }
-        }
-
-        const int bboxWidth =
-            maxX >= minX
-                ? maxX - minX + 1
-                : 0;
-
-        const int bboxHeight =
-            maxY >= minY
-                ? maxY - minY + 1
-                : 0;
-
-        const auto complete =
-            [this](
-                int observed,
-                int expected
-            ) noexcept {
-
-                if (expected <= 0) {
-                    return false;
-                }
-
-                const float tolerance =
-                    static_cast<float>(
-                        expected
-                    ) *
-                    static_cast<float>(
-                        config_.bboxTolerance
-                    );
-
-                return std::abs(
-                    static_cast<float>(
-                        observed - expected
-                    )
-                ) <= tolerance;
-            };
-
-        const bool boxComplete =
-            complete(
-                bboxWidth,
-                bestTemplate->bboxWidth
-            ) &&
-            complete(
-                bboxHeight,
-                bestTemplate->bboxHeight
-            );
-
-        allBoxes =
-            allBoxes &&
-            boxComplete;
-
-        if (slot == 0 ||
-            slot == 5) {
-
-            edgeBoxes =
-                edgeBoxes &&
-                boxComplete;
-
-            const int startX =
-                slot == 0
-                    ? 0
-                    : kTemplateWidth -
-                        kProbeColumns;
-
-            const int endX =
-                slot == 0
-                    ? kProbeColumns
-                    : kTemplateWidth;
-
-            std::uint64_t difference{};
-            std::size_t samples{};
-
-            for (int y = 0;
-                 y < kTemplateHeight;
-                 ++y) {
-
-                const auto* row =
-                    normalizedSlot.data() +
-                    static_cast<std::size_t>(y) *
-                        kTemplateWidth;
-
-                for (int x = startX;
-                     x < endX;
-                     ++x) {
-
-                    difference +=
-                        static_cast<unsigned>(
-                            std::abs(
-                                static_cast<int>(
-                                    row[x]
-                                ) -
-                                static_cast<int>(
-                                    bestTemplate
-                                        ->background
-                                )
-                            )
-                        );
-
-                    ++samples;
-                }
-            }
-
-            const double meanDifference =
-                samples == 0
-                    ? std::numeric_limits<
-                        double
-                    >::infinity()
-                    : static_cast<double>(
-                        difference
-                    ) /
-                    static_cast<double>(
-                        samples
-                    );
-
-            probeOk =
-                probeOk &&
-                meanDifference <=
-                    config_
-                        .backgroundThreshold;
-        }
-
-        const float safeSecond =
-            std::max(
-                0.0F,
-                secondScore
-            );
-
-        auto& result =
-            candidate.slots[slot];
-
-        result = MatchResult{
-            bestTemplate->value,
+        const float safeSecond = std::max(0.0F, secondScore);
+        const Run& run = runs[slot];
+        candidate.slots[slot] = {
+            bestValue,
             bestScore,
             safeSecond,
             bestScore - safeSecond,
-            bboxWidth,
-            bboxHeight
+            run.left,
+            run.right,
+            run.right - run.left + 1,
+            run.bottom - run.top + 1
         };
-
-        candidate.code.push_back(
-            result.value
-        );
-
-        allScores =
-            allScores &&
-            bestScore >=
-                config_.scoreThreshold &&
-            result.margin >=
-                config_.marginThreshold;
+        candidate.code.push_back(bestValue);
+        allScores = allScores &&
+            bestScore >= config_.scoreThreshold &&
+            candidate.slots[slot].margin >= config_.marginThreshold;
     }
 
-    candidate.structureValid =
-        candidate.code.size() == 6 &&
-
-        std::all_of(
-            candidate.code.begin(),
-            candidate.code.begin() + 3,
-            [](char c) {
-                return c >= 'A' &&
-                       c <= 'Z';
-            }
-        ) &&
-
-        std::all_of(
-            candidate.code.begin() + 3,
-            candidate.code.end(),
-            [](char c) {
-                return c >= '0' &&
-                       c <= '9';
-            }
-        );
-
-    candidate.boundingBoxesComplete =
-        allBoxes;
-
-    candidate.edgeSlotsComplete =
-        edgeBoxes;
-
-    candidate.backgroundProbeOk =
-        probeOk;
-
-    int inkSlots = 0;
-
-    for (const auto& slotResult :
-         candidate.slots) {
-
-        if (slotResult.bboxWidth >=
-                kInkMinWidth &&
-            slotResult.bboxHeight >=
-                kInkMinHeight) {
-            ++inkSlots;
-        }
-    }
-
-    candidate.codeVisible =
-        inkSlots >= kInkSlotsRequired;
-
-    candidate.highConfidence =
-        candidate.structureValid &&
-        allScores &&
-        allBoxes &&
-        edgeBoxes &&
-        probeOk &&
-        candidate.codeVisible;
-
+    candidate.structureValid = candidate.code.size() == kRequiredGlyphs;
+    candidate.boundingBoxesComplete = true;
+    candidate.edgeSlotsComplete = true;
+    candidate.backgroundProbeOk = backgroundProbe(
+        roi,
+        background,
+        config_.backgroundThreshold
+    );
+    candidate.codeVisible = true;
+    candidate.highConfidence = candidate.structureValid && allScores &&
+        candidate.backgroundProbeOk;
     return candidate;
 }
 
-
-Candidate Recognizer::evaluate(
-    std::string_view code
-) const {
+Candidate Recognizer::evaluate(std::string_view code) const {
     Candidate candidate{};
-
     candidate.code = code;
-
-    candidate.structureValid =
-        code.size() == 6 &&
-
-        std::all_of(
-            code.begin(),
-            code.begin() + 3,
-            [](char c) {
-                return c >= 'A' &&
-                       c <= 'Z';
-            }
-        ) &&
-
-        std::all_of(
-            code.begin() + 3,
-            code.end(),
-            [](char c) {
-                return c >= '0' &&
-                       c <= '9';
-            }
-        );
-
+    candidate.structureValid = code.size() == 6 &&
+        std::all_of(code.begin(), code.begin() + 3, [](char value) {
+            return value >= 'A' && value <= 'Z';
+        }) &&
+        std::all_of(code.begin() + 3, code.end(), [](char value) {
+            return value >= '0' && value <= '9';
+        });
     return candidate;
 }
-
 
 bool Recognizer::shouldSubmit(
     const Candidate& candidate,
     const std::optional<std::string>& previous
 ) const {
-    if (!candidate.structureValid ||
-        !candidate.boundingBoxesComplete ||
-        !candidate.edgeSlotsComplete ||
-        !candidate.backgroundProbeOk ||
+    if (!candidate.structureValid || !candidate.boundingBoxesComplete ||
+        !candidate.edgeSlotsComplete || !candidate.backgroundProbeOk ||
         !candidate.codeVisible) {
-
         return false;
     }
-
-    // Level A: single-frame high confidence (score >= normal score threshold,
-    // margin >= normal margin threshold for every slot, plus the structure,
-    // bbox, edge and background-probe gates above).
     if (candidate.highConfidence) {
         return true;
     }
-
-    // Level B: two consecutive identical frames. A low-score candidate must not
-    // be submitted just because two frames agree: every slot still has to clear
-    // a conservative floor derived from the normal thresholds. Prefer Timeout
-    // over a Wrong submission.
     if (!previous || *previous != candidate.code) {
         return false;
     }
 
-    const double fallbackScore =
-        std::max(
-            0.0,
-            config_.scoreThreshold - 0.03
-        );
-
-    // Wrong reads on an ambiguous ROI are almost always near-ties between two
-    // characters (min-margin around 0), while a correct read keeps a small but
-    // non-zero min-margin. 0.075 * marginThreshold lands at ~0.006 for the
-    // default 0.08 - enough to reject the ties, far below the single-frame
-    // high-confidence margin. Prefer Timeout over Wrong.
-    const double fallbackMargin =
-        std::max(
-            0.0,
-            config_.marginThreshold * 0.075
-        );
-
-    for (const auto& slot :
-         candidate.slots) {
-
-        if (static_cast<double>(
-                slot.bestScore) <
-            fallbackScore) {
-            return false;
+    const double fallbackScore = std::max(0.0, config_.scoreThreshold - 0.03);
+    const double fallbackMargin = std::max(0.0, config_.marginThreshold * 0.075);
+    return std::all_of(
+        candidate.slots.begin(),
+        candidate.slots.end(),
+        [fallbackScore, fallbackMargin](const MatchResult& slot) {
+            return static_cast<double>(slot.bestScore) >= fallbackScore &&
+                static_cast<double>(slot.margin) >= fallbackMargin;
         }
-
-        if (static_cast<double>(
-                slot.margin) <
-            fallbackMargin) {
-            return false;
-        }
-    }
-
-    return true;
+    );
 }
 
 } // namespace valinvite

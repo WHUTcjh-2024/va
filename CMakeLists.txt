@@ -25,8 +25,8 @@ add_executable(VALInviteOffline
     src/recognizer.cpp
 )
 
-target_include_directories(VALInvite PRIVATE include)
-target_include_directories(VALInviteOffline PRIVATE include)
+target_include_directories(VALInvite PRIVATE include "${CMAKE_SOURCE_DIR}")
+target_include_directories(VALInviteOffline PRIVATE include "${CMAKE_SOURCE_DIR}")
 target_compile_features(VALInvite PRIVATE cxx_std_20)
 target_compile_features(VALInviteOffline PRIVATE cxx_std_20)
 target_compile_definitions(VALInvite PRIVATE

@@ -45,10 +45,6 @@ int App::run() {
         return 1;
     }
     std::wstring error;
-    if (!recognizer_.loadTemplates(resourceDirectory_ / L"templates", error)) {
-        MessageBoxW(nullptr, error.c_str(), L"VAL Invite", MB_OK | MB_ICONERROR);
-        return 1;
-    }
     if (!configStore_.load(config_, error)) {
         MessageBoxW(nullptr, (L"将使用默认配置：\n" + error).c_str(), L"VAL Invite", MB_OK | MB_ICONINFORMATION);
     }

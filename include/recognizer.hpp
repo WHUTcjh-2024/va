@@ -4,9 +4,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
+#include <memory>
 #include <string_view>
-#include <vector>
 
 namespace valinvite {
 
@@ -30,13 +29,15 @@ public:
     Recognizer();
     ~Recognizer();
 
-    [[nodiscard]] bool loadTemplates(const std::filesystem::path& directory, std::wstring& error);
+    Recognizer(const Recognizer&) = delete;
+    Recognizer& operator=(const Recognizer&) = delete;
+
     void setConfig(const RecognitionConfig& config) noexcept;
-    [[nodiscard]] bool usingAvx2() const noexcept;
     [[nodiscard]] bool ready() const noexcept;
 
-    // ROI is divided into six equal logical slots. The remainder pixels are
-    // distributed from left to right, so every ROI pixel belongs to one slot.
+    // Segment the complete ROI into exactly six foreground runs, normalize
+    // each glyph independently while preserving aspect ratio, then match the
+    // compile-time A-Z/0-9 atlas. Any other run count is treated as no code.
     [[nodiscard]] Candidate recognize(const GrayImageView& roi) const;
 
     // Syntax-only helper. It deliberately does not manufacture image gates;
@@ -44,20 +45,9 @@ public:
     [[nodiscard]] Candidate evaluate(std::string_view code) const;
     [[nodiscard]] bool shouldSubmit(const Candidate& candidate, const std::optional<std::string>& previous) const;
 private:
-    struct Template final {
-        char value{};
-        int width{};
-        int height{};
-        int bboxX{};
-        int bboxY{};
-        int bboxWidth{};
-        int bboxHeight{};
-        std::uint8_t background{};
-        std::vector<std::uint8_t> pixels;
-    };
-    std::array<std::vector<Template>, 36> templates_{};
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
     RecognitionConfig config_{};
-    bool avx2Available_{};
 };
 
 } // namespace valinvite

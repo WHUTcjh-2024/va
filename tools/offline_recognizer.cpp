@@ -60,10 +60,10 @@ void printBoolean(std::string_view name, bool value) {
 } // namespace
 
 int wmain(int argc, wchar_t* argv[]) {
-    if (argc != 6) {
+    if (argc != 5) {
         std::cerr
             << "Usage: VALInviteOffline <raw-gray> <width> <height> "
-               "<expected-code> <templates-dir>\n";
+               "<expected-code>\n";
         return 2;
     }
 
@@ -99,14 +99,6 @@ int wmain(int argc, wchar_t* argv[]) {
     }
 
     valinvite::Recognizer recognizer;
-    std::wstring error;
-    if (!recognizer.loadTemplates(std::filesystem::path{argv[5]}, error)) {
-        std::wcerr << error << L'\n';
-        return 2;
-    }
-
-    // Deliberately use the production defaults. Real-sample regression must
-    // expose threshold failures instead of silently relaxing them.
     recognizer.setConfig(valinvite::RecognitionConfig{});
     const valinvite::Candidate candidate = recognizer.recognize({
         pixels.data(), *width, *height, *width
@@ -125,6 +117,7 @@ int wmain(int argc, wchar_t* argv[]) {
                   << " score=" << result.bestScore
                   << " second=" << result.secondScore
                   << " margin=" << result.margin
+                  << " x=" << result.xStart << '-' << result.xEnd
                   << " bbox=" << result.bboxWidth << 'x' << result.bboxHeight
                   << '\n';
     }
