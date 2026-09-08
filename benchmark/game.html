@@ -23,24 +23,14 @@
       const form = document.querySelector("#join-form"), input = document.querySelector("#invite"), status = document.querySelector("#status");
       let active = null;
       const normalise = (value) => value.trim().toUpperCase();
-      B.onMessage((message) => {
-        if (message.type === "round-open") {
-          active = { runId: message.runId, roundId: message.roundId, submitted: false };
-          input.value = ""; input.focus(); status.textContent = `Round ${message.roundId}: 已开启`;
-        } else if (message.type === "round-revealed" && active?.runId === message.runId && active.roundId === message.roundId) {
-          status.textContent = `Round ${message.roundId}: 已显示，等待 JOIN`;
-        } else if (message.type === "round-close" && active?.runId === message.runId && active.roundId === message.roundId) {
-          active = null; status.textContent = "等待下一轮";
-        } else if (message.type === "run-finish" && active?.runId === message.runId) {
-          active = null; status.textContent = "Benchmark 已结束";
-        }
-      });
-      form.addEventListener("submit", (event) => {
+      const poll = async () => { try { const round = await fetch("/api/active", { cache: "no-store" }).then(response => response.json()); if (round.open && (!active || active.roundId !== round.roundId)) { active = { runId: round.runId, roundId: round.roundId, submitted: false }; input.value = ""; input.focus(); status.textContent = `Round ${round.roundId}: 已开启`; } if (!round.open) active = null; } finally { setTimeout(poll, 80); } };
+      void poll();
+      form.addEventListener("submit", async (event) => {
         event.preventDefault();
         if (!active || active.submitted) return;
         active.submitted = true;
         const submittedCode = normalise(input.value);
-        B.post({ type: "submission", runId: active.runId, roundId: active.roundId, submitted_code: submittedCode, t1_unix_ms: Date.now() });
+        await fetch("/api/submit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ runId: active.runId, roundId: active.roundId, code: submittedCode }) });
         status.textContent = `Round ${active.roundId}: 已记录首次提交 ${submittedCode || "(empty)"}`;
       });
       input.addEventListener("input", () => { input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g, ""); });

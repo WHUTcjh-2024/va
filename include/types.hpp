@@ -4,6 +4,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -59,6 +60,7 @@ struct Candidate final {
     std::string code;
     bool structureValid{};
     bool boundingBoxesComplete{};
+    bool edgeSlotsComplete{};
     bool backgroundProbeOk{};
     bool highConfidence{};
 };
@@ -67,6 +69,19 @@ struct TimingSnapshot final {
     double recognitionMs{};
     double decisionMs{};
     double dispatchMs{};
+};
+
+struct LatencyPercentiles final {
+    double p50{};
+    double p95{};
+    double p99{};
+    std::size_t samples{};
+};
+
+struct MemorySnapshot final {
+    std::size_t workingSetBytes{};
+    std::size_t privateBytes{};
+    std::size_t peakWorkingSetBytes{};
 };
 
 } // namespace valinvite

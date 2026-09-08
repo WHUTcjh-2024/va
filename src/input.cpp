@@ -23,10 +23,10 @@ bool screenPointToAbsolute(const valinvite::Point& point, LONG& x, LONG& y) {
     return true;
 }
 
-void appendClick(std::array<INPUT, 24>& inputs, std::size_t& count, const valinvite::Point& point) {
+bool appendClick(std::array<INPUT, 24>& inputs, std::size_t& count, const valinvite::Point& point) {
     LONG x{};
     LONG y{};
-    (void)screenPointToAbsolute(point, x, y);
+    if (!screenPointToAbsolute(point, x, y)) return false;
     const DWORD flags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
     INPUT& move = inputs[count++];
     move.type = INPUT_MOUSE;
@@ -39,6 +39,7 @@ void appendClick(std::array<INPUT, 24>& inputs, std::size_t& count, const valinv
     INPUT& up = inputs[count++];
     up.type = INPUT_MOUSE;
     up.mi.dwFlags = flags | MOUSEEVENTF_LEFTUP;
+    return true;
 }
 
 void appendVirtualKey(std::array<INPUT, 24>& inputs, std::size_t& count, WORD key) {
@@ -91,7 +92,10 @@ bool InputDispatcher::submit(std::string_view code, const Config& config, std::w
 
     std::array<INPUT, 24> inputs{};
     std::size_t count{};
-    appendClick(inputs, count, config.inputPoint);
+    if (!appendClick(inputs, count, config.inputPoint)) {
+        error = L"无法转换输入框屏幕坐标";
+        return false;
+    }
     INPUT& controlDown = inputs[count++];
     controlDown.type = INPUT_KEYBOARD;
     controlDown.ki.wVk = VK_CONTROL;
@@ -104,7 +108,10 @@ bool InputDispatcher::submit(std::string_view code, const Config& config, std::w
     if (config.submitMode == SubmitMode::Enter) {
         appendVirtualKey(inputs, count, VK_RETURN);
     } else {
-        appendClick(inputs, count, config.joinPoint);
+        if (!appendClick(inputs, count, config.joinPoint)) {
+            error = L"无法转换 Join 屏幕坐标";
+            return false;
+        }
     }
 
     const UINT sent = SendInput(static_cast<UINT>(count), inputs.data(), sizeof(INPUT));

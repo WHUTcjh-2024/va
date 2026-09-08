@@ -16,6 +16,8 @@ class App final {
 public:
     explicit App(HINSTANCE instance);
     [[nodiscard]] int run();
+    // Capture/recognition workers call this on the UI thread after extracting text from a frame.
+    void onRecognizedText(std::string_view code, double recognitionMs);
     void onCandidate(const Candidate& candidate);
 
 private:
@@ -23,6 +25,8 @@ private:
     void stop();
     void handleHotkey(WPARAM hotkeyId);
     void persistCalibration();
+    void reportWarning(const std::wstring& message);
+    void applyPerformancePolicy();
 
     HINSTANCE instance_{};
     Config config_{};
@@ -37,6 +41,7 @@ private:
     TimingSnapshot timing_{};
     std::optional<std::string> pendingCandidate_;
     std::optional<std::string> lastSubmittedCode_;
+    std::wstring lastError_;
 };
 
 } // namespace valinvite

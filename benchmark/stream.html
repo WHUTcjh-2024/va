@@ -66,12 +66,7 @@
       let pendingResult = null;
 
       const randomItem = (items) => items[Math.floor(Math.random() * items.length)];
-      const randomCode = (roundId) => {
-        // Every fifth round deliberately exercises visually confusable glyphs.
-        const letters = roundId % 5 === 0 ? ambiguousLetters : alphabet;
-        const numbers = roundId % 5 === 0 ? ambiguousDigits : digits;
-        return Array.from({ length: 3 }, () => randomItem(letters)).join("") + Array.from({ length: 3 }, () => randomItem(numbers)).join("");
-      };
+      const api = (path, body) => fetch(path, body === undefined ? { cache: "no-store" } : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(response => response.json());
       const setRunning = (running) => {
         elements.start.disabled = running; elements.stop.disabled = !running;
         for (const element of [elements.rounds, elements.revealMs, elements.timeoutMs]) element.disabled = running;
@@ -82,7 +77,8 @@
         }));
         const glyphs = [...elements.code.children];
         const delay = glyphs.length === 0 ? 0 : revealMs / glyphs.length;
-        for (const glyph of glyphs) { glyph.classList.add("visible"); await B.sleep(delay); }
+        const order = [2, 3, 1, 4, 0, 5].filter(index => glyphs[index]);
+        for (const index of order) { glyphs[index].classList.add("visible"); await B.sleep(delay); }
       };
       const summarise = () => {
         const counts = { correct: 0, wrong: 0, early_submit: 0, timeout: 0 };
@@ -115,27 +111,26 @@
         const settings = { rounds: Number(elements.rounds.value), revealMs: Number(elements.revealMs.value), timeoutMs: Number(elements.timeoutMs.value), gapMs: B.DEFAULTS.gapMs };
         if (![settings.rounds, settings.revealMs, settings.timeoutMs].every(Number.isFinite) || settings.rounds < 1) return;
         records = []; pendingResult = null; elements.download.disabled = true; setRunning(true);
-        activeRun = { id: crypto.randomUUID(), roundId: 0, stopped: false };
-        B.post({ type: "run-start", runId: activeRun.id, settings });
+        const created = await api("/api/run", settings);
+        activeRun = { id: created.runId, roundId: 0, stopped: false };
         for (let roundId = 1; roundId <= settings.rounds && !activeRun.stopped; roundId++) {
           activeRun.roundId = roundId; pendingResult = null;
-          const expected_code = randomCode(roundId);
-          B.post({ type: "round-open", runId: activeRun.id, roundId, expectedCode: expected_code });
+          await api("/api/open", { roundId });
           elements.state.textContent = `Round ${roundId}/${settings.rounds}: reveal 中`;
-          await renderCode(expected_code, settings.revealMs);
-          const t0_unix_ms = Date.now();
-          const round = { run_id: activeRun.id, round_id: roundId, expected_code, t0_unix_ms };
-          B.post({ type: "round-revealed", runId: activeRun.id, roundId, expectedCode: expected_code, t0UnixMs: t0_unix_ms });
+          const code = await api("/api/code", {});
+          await renderCode(code.code, settings.revealMs);
+          await api("/api/reveal", {});
           elements.state.textContent = `Round ${roundId}/${settings.rounds}: 已完全显示，等待提交`;
           const deadline = Date.now() + settings.timeoutMs;
-          while (!pendingResult && !activeRun.stopped && Date.now() < deadline) await B.sleep(10);
-          if (!activeRun.stopped) records.push(resultFor(round, pendingResult));
-          B.post({ type: "round-close", runId: activeRun.id, roundId });
+          while (!activeRun.stopped && Date.now() < deadline) {
+            if ((await api("/api/submitted")).submitted) break;
+            await B.sleep(10);
+          }
+          if (!activeRun.stopped) records.push(await api("/api/close", {}));
           summarise();
-          await B.sleep(settings.gapMs);
+          await B.sleep(settings.gapMs + Math.floor(Math.random() * B.DEFAULTS.jitterMs));
         }
         const stopped = activeRun.stopped;
-        B.post({ type: "run-finish", runId: activeRun.id, stopped });
         activeRun = null; setRunning(false); elements.download.disabled = records.length === 0;
         elements.state.textContent = stopped ? "已停止" : `完成：${records.length} rounds`;
       };
