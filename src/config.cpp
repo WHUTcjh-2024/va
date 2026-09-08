@@ -1,6 +1,7 @@
 #include "config.hpp"
 
 #include <fstream>
+#include <iomanip>
 #include <regex>
 #include <sstream>
 
@@ -21,11 +22,12 @@ std::optional<bool> boolean(const std::string& json, const std::string& key) {
     return match[1].str() == "true";
 }
 
-std::optional<Rect> roi(const std::string& json) {
-    const std::regex expression{R"("roi"\s*:\s*\{"x"\s*:\s*(-?\d+)\s*,\s*"y"\s*:\s*(-?\d+)\s*,\s*"w"\s*:\s*(-?\d+)\s*,\s*"h"\s*:\s*(-?\d+)\})"};
+std::optional<NormalizedRect> normalizedRoi(const std::string& json) {
+    const std::regex expression{R"("roi_ratio"\s*:\s*\{"x"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*,\s*"y"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*,\s*"w"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*,\s*"h"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)\})"};
     std::smatch match;
     if (!std::regex_search(json, match, expression)) return std::nullopt;
-    return Rect{std::stoi(match[1].str()), std::stoi(match[2].str()), std::stoi(match[3].str()), std::stoi(match[4].str())};
+    NormalizedRect result{std::stod(match[1].str()), std::stod(match[2].str()), std::stod(match[3].str()), std::stod(match[4].str())};
+    return result.valid() ? std::optional<NormalizedRect>{result} : std::nullopt;
 }
 
 } // namespace
@@ -49,7 +51,7 @@ bool ConfigStore::load(Config& config, std::wstring& error) const {
     const auto joinY = number(json, "join_y");
     const auto affinity = number(json, "cpu_affinity");
     const auto priority = boolean(json, "thread_priority_highest");
-    const auto captureRoi = roi(json);
+    const auto captureRoi = normalizedRoi(json);
     if (!score || !margin || !bbox || !background || !inputX || !inputY || !joinX || !joinY || !affinity || !priority || !captureRoi) {
         error = L"config.json 缺少识别阈值";
         return false;
@@ -58,7 +60,8 @@ bool ConfigStore::load(Config& config, std::wstring& error) const {
     config.recognition.marginThreshold = *margin;
     config.recognition.bboxTolerance = *bbox;
     config.recognition.backgroundThreshold = *background;
-    config.roi = *captureRoi;
+    config.normalizedRoi = *captureRoi;
+    config.roi = {};
     config.inputPoint = {static_cast<int>(*inputX), static_cast<int>(*inputY)};
     config.joinPoint = {static_cast<int>(*joinX), static_cast<int>(*joinY)};
     config.cpuAffinity = static_cast<int>(*affinity);
@@ -69,14 +72,22 @@ bool ConfigStore::load(Config& config, std::wstring& error) const {
 }
 
 bool ConfigStore::save(const Config& config, std::wstring& error) const {
+    std::error_code directoryError;
+    const auto parent = path_.parent_path();
+    if (!parent.empty()) std::filesystem::create_directories(parent, directoryError);
+    if (directoryError) {
+        error = L"无法创建用户配置目录";
+        return false;
+    }
     std::ofstream file{path_, std::ios::trunc};
     if (!file) {
         error = L"无法写入 config.json";
         return false;
     }
-    file << "{\n  \"capture\": {\n    \"window_title\": \"\",\n"
-         << "    \"roi\": {\"x\": " << config.roi.x << ", \"y\": " << config.roi.y
-         << ", \"w\": " << config.roi.width << ", \"h\": " << config.roi.height << "}\n  },\n"
+    file << std::fixed << std::setprecision(8)
+         << "{\n  \"capture\": {\n    \"window_title\": \"\",\n"
+         << "    \"roi_ratio\": {\"x\": " << config.normalizedRoi.x << ", \"y\": " << config.normalizedRoi.y
+         << ", \"w\": " << config.normalizedRoi.width << ", \"h\": " << config.normalizedRoi.height << "}\n  },\n"
          << "  \"recognition\": {\n    \"score_threshold\": " << config.recognition.scoreThreshold
          << ",\n    \"margin_threshold\": " << config.recognition.marginThreshold
          << ",\n    \"bbox_tolerance\": " << config.recognition.bboxTolerance

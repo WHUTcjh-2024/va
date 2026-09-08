@@ -54,9 +54,6 @@ private:
 
     HINSTANCE instance_{};
 
-    std::filesystem::path
-        resourceDirectory_;
-
     Config config_{};
 
     ConfigStore configStore_;

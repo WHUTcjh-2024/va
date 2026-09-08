@@ -1,5 +1,7 @@
 #include "app.hpp"
 
+#include <shlobj.h>
+
 #include <array>
 #include <memory>
 #include <string>
@@ -19,18 +21,18 @@ struct RecognizedCandidate final {
     double recognitionMs{};
 };
 
-std::filesystem::path executableDirectory() {
-    std::array<wchar_t, 32768> path{};
-    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-    if (length == 0 || length >= path.size()) return {};
-    return std::filesystem::path{std::wstring_view{path.data(), length}}.parent_path();
+std::filesystem::path localConfigPath() {
+    PWSTR rawPath{};
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &rawPath))) return {};
+    const std::filesystem::path path{rawPath};
+    CoTaskMemFree(rawPath);
+    return path / L"VALInvite" / L"config.json";
 }
 }
 
 App::App(HINSTANCE instance)
     : instance_{instance},
-      resourceDirectory_{executableDirectory()},
-      configStore_{resourceDirectory_ / L"config.json"} {}
+      configStore_{localConfigPath()} {}
 App::~App() {
     acceptingFrames_.store(false, std::memory_order_release);
     capture_.setFrameCallback({});
@@ -40,10 +42,6 @@ App::~App() {
 int App::run() {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
-    if (resourceDirectory_.empty()) {
-        MessageBoxW(nullptr, L"无法确定程序所在目录", L"VAL Invite", MB_OK | MB_ICONERROR);
-        return 1;
-    }
     std::wstring error;
     if (!configStore_.load(config_, error)) {
         MessageBoxW(nullptr, (L"将使用默认配置：\n" + error).c_str(), L"VAL Invite", MB_OK | MB_ICONINFORMATION);
@@ -102,13 +100,6 @@ void App::start() {
         return;
     }
 
-    if (!config_.roi.valid()) {
-        reportWarning(
-            L"ROI 尚未框选"
-        );
-        return;
-    }
-
     const HWND source =
         ui_.selectedWindow();
 
@@ -122,6 +113,13 @@ void App::start() {
 
     std::wstring error;
 
+    Rect activeRoi{};
+    if (!calibrator_.resolveRoi(config_, source, activeRoi, error)) {
+        reportWarning(error);
+        return;
+    }
+    config_.roi = activeRoi;
+
     recognizer_.setConfig(
         config_.recognition
     );
@@ -129,10 +127,10 @@ void App::start() {
     // Hot Path buffer 只在 START 时分配。
     const std::size_t graySize =
         static_cast<std::size_t>(
-            config_.roi.width
+            activeRoi.width
         ) *
         static_cast<std::size_t>(
-            config_.roi.height
+            activeRoi.height
         );
 
     grayBuffer_.assign(
@@ -150,7 +148,7 @@ void App::start() {
 
     if (!capture_.start(
             source,
-            config_.roi,
+            activeRoi,
             error)) {
 
         capture_.setFrameCallback({});

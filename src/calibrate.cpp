@@ -3,6 +3,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 
 namespace valinvite {
@@ -35,11 +36,24 @@ std::vector<CaptureWindow> Calibrator::enumerateCaptureWindows() const {
     return result;
 }
 bool Calibrator::selectCaptureWindow(Config& config, HWND window, std::wstring& error) const {
-    ThreadDpiContext dpi; if (!capturable(window)) { error = L"请选择一个可见的顶层直播窗口"; return false; } const int length = GetWindowTextLengthW(window); std::wstring title(static_cast<size_t>(length) + 1, L'\0'); GetWindowTextW(window, title.data(), static_cast<int>(title.size())); title.resize(static_cast<size_t>(length)); config.captureWindowTitle = std::move(title); config.roi = {}; return true;
+    ThreadDpiContext dpi; if (!capturable(window)) { error = L"请选择一个可见的顶层直播窗口"; return false; } const int length = GetWindowTextLengthW(window); std::wstring title(static_cast<size_t>(length) + 1, L'\0'); GetWindowTextW(window, title.data(), static_cast<int>(title.size())); title.resize(static_cast<size_t>(length)); config.captureWindowTitle = std::move(title); config.normalizedRoi = {}; config.roi = {}; return true;
 }
 bool Calibrator::selectCaptureWindowAtCursor(Config& config, std::wstring& error) const { ThreadDpiContext dpi; POINT point{}; if (!GetCursorPos(&point)) { error = L"无法读取鼠标位置"; return false; } return selectCaptureWindow(config, GetAncestor(WindowFromPoint(point), GA_ROOT), error); }
 bool Calibrator::selectRoi(Config& config, HWND window, std::wstring& error) const {
-    ThreadDpiContext dpi; Rect area{}; if (!capturable(window) || !clientArea(window, area)) { error = L"直播窗口无效或没有可用 Client Area"; return false; } if (!registerOverlay(error)) return false; OverlayState state{}; HWND overlay = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW, kOverlayClass, L"", WS_POPUP, area.x, area.y, area.width, area.height, nullptr, nullptr, GetModuleHandleW(nullptr), &state); if (!overlay) { error = L"创建 ROI 框选层失败"; return false; } SetLayeredWindowAttributes(overlay, 0, 96, LWA_ALPHA); ShowWindow(overlay, SW_SHOWNOACTIVATE); SetForegroundWindow(overlay); MSG message{}; while (IsWindow(overlay) && GetMessageW(&message, nullptr, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); } if (message.message == WM_QUIT) PostQuitMessage(static_cast<int>(message.wParam)); if (!state.accepted || state.cancelled) { error = L"已取消 ROI 框选"; return false; } config.roi = {std::min(state.start.x, state.current.x), std::min(state.start.y, state.current.y), std::abs(state.current.x - state.start.x), std::abs(state.current.y - state.start.y)}; return true;
+    ThreadDpiContext dpi; Rect area{}; if (!capturable(window) || !clientArea(window, area)) { error = L"直播窗口无效或没有可用 Client Area"; return false; } if (!registerOverlay(error)) return false; OverlayState state{}; HWND overlay = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW, kOverlayClass, L"", WS_POPUP, area.x, area.y, area.width, area.height, nullptr, nullptr, GetModuleHandleW(nullptr), &state); if (!overlay) { error = L"创建 ROI 框选层失败"; return false; } SetLayeredWindowAttributes(overlay, 0, 96, LWA_ALPHA); ShowWindow(overlay, SW_SHOWNOACTIVATE); SetForegroundWindow(overlay); MSG message{}; while (IsWindow(overlay) && GetMessageW(&message, nullptr, 0, 0) > 0) { TranslateMessage(&message); DispatchMessageW(&message); } if (message.message == WM_QUIT) PostQuitMessage(static_cast<int>(message.wParam)); if (!state.accepted || state.cancelled) { error = L"已取消 ROI 框选"; return false; } config.roi = {std::min(state.start.x, state.current.x), std::min(state.start.y, state.current.y), std::abs(state.current.x - state.start.x), std::abs(state.current.y - state.start.y)}; config.normalizedRoi = {static_cast<double>(config.roi.x) / area.width, static_cast<double>(config.roi.y) / area.height, static_cast<double>(config.roi.width) / area.width, static_cast<double>(config.roi.height) / area.height}; return true;
+}
+bool Calibrator::resolveRoi(const Config& config, HWND window, Rect& roi, std::wstring& error) const {
+    ThreadDpiContext dpi; RECT client{};
+    if (!IsWindow(window) || !GetClientRect(window, &client)) { error = L"无法读取直播窗口 Client Area"; return false; }
+    const int clientWidth = client.right - client.left, clientHeight = client.bottom - client.top;
+    if (clientWidth <= 0 || clientHeight <= 0 || !config.normalizedRoi.valid()) { error = L"ROI 尚未框选或归一化坐标无效"; return false; }
+    const auto& value = config.normalizedRoi;
+    const int left = std::clamp(static_cast<int>(std::lround(value.x * clientWidth)), 0, clientWidth - 1);
+    const int top = std::clamp(static_cast<int>(std::lround(value.y * clientHeight)), 0, clientHeight - 1);
+    const int right = std::clamp(static_cast<int>(std::lround((value.x + value.width) * clientWidth)), left + 1, clientWidth);
+    const int bottom = std::clamp(static_cast<int>(std::lround((value.y + value.height) * clientHeight)), top + 1, clientHeight);
+    roi = {left, top, right - left, bottom - top};
+    return true;
 }
 void Calibrator::recordInputPoint(Config& config) const noexcept { POINT point{}; if (GetCursorPos(&point)) config.inputPoint = {point.x, point.y}; }
 void Calibrator::recordJoinPoint(Config& config) const noexcept { POINT point{}; if (GetCursorPos(&point)) config.joinPoint = {point.x, point.y}; }
