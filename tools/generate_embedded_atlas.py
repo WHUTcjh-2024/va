@@ -113,7 +113,10 @@ def normalize(raw: Image.Image, variant: Variant) -> np.ndarray:
     ys, xs = np.nonzero(pixels > 4)
     if len(xs) == 0:
         raise RuntimeError("empty rendered glyph after thresholding")
-    cropped = pixels[ys[0] : ys[-1] + 1, xs[0] : xs[-1] + 1]
+    cropped = pixels[
+        int(ys.min()) : int(ys.max()) + 1,
+        int(xs.min()) : int(xs.max()) + 1,
+    ]
     scale = min(CONTENT / cropped.shape[1], CONTENT / cropped.shape[0])
     width = max(1, round(cropped.shape[1] * scale))
     height = max(1, round(cropped.shape[0] * scale))
