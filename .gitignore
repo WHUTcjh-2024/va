@@ -1,0 +1,7 @@
+/build/
+/.docx-review/
+/.vs/
+*.obj
+*.pdb
+*.ilk
+*.exe

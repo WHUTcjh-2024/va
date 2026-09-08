@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VAL Invite Benchmark Game</title>
+  <style>
+    :root { color-scheme: dark; font-family: Segoe UI, Microsoft YaHei, sans-serif; background: #10131a; color: #edf2ff; }
+    body { max-width: 600px; margin: 0 auto; padding: 80px 20px; } form { display: grid; gap: 14px; margin-top: 24px; }
+    input, button { border: 1px solid #46516b; border-radius: 7px; padding: 13px; font: 600 22px Consolas, monospace; text-transform: uppercase; }
+    input { background: #1a2030; color: inherit; letter-spacing: .12em; } button { background: #e05d45; color: white; cursor: pointer; } #status { color: #aeb9d0; }
+  </style>
+</head>
+<body>
+  <h1>VAL Invite Benchmark Game</h1>
+  <p>真实 HTML input 与 JOIN button。此页只记录每轮首次提交。</p>
+  <form id="join-form"><input id="invite" autocomplete="off" maxlength="6" pattern="[A-Za-z]{3}[0-9]{3}" aria-label="邀请码" autofocus><button id="join" type="submit">JOIN</button></form>
+  <p id="status">等待 stream 回合</p>
+  <script src="benchmark.js"></script>
+  <script>
+    (() => {
+      const B = window.ValInviteBenchmark;
+      const form = document.querySelector("#join-form"), input = document.querySelector("#invite"), status = document.querySelector("#status");
+      let active = null;
+      const normalise = (value) => value.trim().toUpperCase();
+      B.onMessage((message) => {
+        if (message.type === "round-open") {
+          active = { runId: message.runId, roundId: message.roundId, submitted: false };
+          input.value = ""; input.focus(); status.textContent = `Round ${message.roundId}: 已开启`;
+        } else if (message.type === "round-revealed" && active?.runId === message.runId && active.roundId === message.roundId) {
+          status.textContent = `Round ${message.roundId}: 已显示，等待 JOIN`;
+        } else if (message.type === "round-close" && active?.runId === message.runId && active.roundId === message.roundId) {
+          active = null; status.textContent = "等待下一轮";
+        } else if (message.type === "run-finish" && active?.runId === message.runId) {
+          active = null; status.textContent = "Benchmark 已结束";
+        }
+      });
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        if (!active || active.submitted) return;
+        active.submitted = true;
+        const submittedCode = normalise(input.value);
+        B.post({ type: "submission", runId: active.runId, roundId: active.roundId, submitted_code: submittedCode, t1_unix_ms: Date.now() });
+        status.textContent = `Round ${active.roundId}: 已记录首次提交 ${submittedCode || "(empty)"}`;
+      });
+      input.addEventListener("input", () => { input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g, ""); });
+    })();
+  </script>
+</body>
+</html>
