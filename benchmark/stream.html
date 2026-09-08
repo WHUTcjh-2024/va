@@ -81,11 +81,11 @@
         for (const index of order) { glyphs[index].classList.add("visible"); await B.sleep(delay); }
       };
       const summarise = () => {
-        const counts = { correct: 0, wrong: 0, early_submit: 0, timeout: 0 };
+        const counts = { correct: 0, wrong: 0, early: 0, timeout: 0 };
         for (const record of records) counts[record.outcome.toLowerCase()]++;
         const latencies = records.filter((record) => record.outcome === "CORRECT").map((record) => record.latency_ms);
         const stats = {
-          Rounds: records.length, Correct: counts.correct, Wrong: counts.wrong, "Early Submit": counts.early_submit, Timeout: counts.timeout,
+          Rounds: records.length, Correct: counts.correct, Wrong: counts.wrong, EARLY: counts.early, Timeout: counts.timeout,
           "Accuracy (%)": records.length ? B.formatNumber(100 * counts.correct / records.length) : "0.00",
           "Mean (ms)": latencies.length ? B.formatNumber(latencies.reduce((sum, value) => sum + value, 0) / latencies.length) : "",
           "P50 (ms)": B.formatNumber(B.percentile(latencies, .50)), "P95 (ms)": B.formatNumber(B.percentile(latencies, .95)), "P99 (ms)": B.formatNumber(B.percentile(latencies, .99)),

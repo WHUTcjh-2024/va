@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.25)
 
 project(VALInvite VERSION 0.1.0 LANGUAGES CXX)
 
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 if (NOT WIN32)
     message(FATAL_ERROR "VALInvite is a Windows-only application.")
 endif()
@@ -34,6 +36,16 @@ target_link_libraries(VALInvite PRIVATE
     user32
     gdi32
     shell32
+)
+
+add_custom_command(TARGET VALInvite POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/config.json"
+        "$<TARGET_FILE_DIR:VALInvite>/config.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/templates"
+        "$<TARGET_FILE_DIR:VALInvite>/templates"
+    COMMENT "Copying runtime configuration and recognition templates"
 )
 
 if (MSVC)

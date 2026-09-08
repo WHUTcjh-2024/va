@@ -1,6 +1,6 @@
 # VAL Invite V1
 
-Windows 本地邀请码识别工具的工程骨架。当前完成 P0.1：C++20/CMake 工程、Win32 主窗口、DPI 感知、F8/F9 坐标校准、JSON 配置持久化、模块边界与高精度计时。
+Windows 本地邀请码识别工具。当前已完成 C++20/CMake 工程、Win32 主窗口、DPI 感知、F8/F9 坐标校准、JSON 配置持久化，以及 WGC 捕获、模板识别和 SendInput 的第一版集成。
 
 界面现可选择目标窗口、拖拽框选 ROI 并预览，F10/F11 分别启动/停止。启动会校验窗口与 ROI，应用线程按配置提升优先级并尝试设置 CPU 亲和性；识别结果通过 `App::onRecognizedText` 进入 Recognizer → Decision → SendInput，失败会提示原因，STOP 后可重新 START Arm。
 
@@ -14,7 +14,18 @@ Windows 本地邀请码识别工具的工程骨架。当前完成 P0.1：C++20/C
 cmd /d /c 'call "D:\VS2026\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 && cmake -S "D:\Desktop\抢码脚本" -B "%LOCALAPPDATA%\valinvite-build" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release && cmake --build "%LOCALAPPDATA%\valinvite-build"'
 ```
 
-生成文件：`%LOCALAPPDATA%\valinvite-build\VALInvite.exe`。
+生成文件位于 `%LOCALAPPDATA%\valinvite-build`。构建会把 `config.json` 与 `templates` 自动复制到 EXE 同目录；程序始终从 EXE 所在目录加载这些资源，因此可以从任意工作目录启动。
+
+当前便携目录结构：
+
+```text
+valinvite-build/
+├── VALInvite.exe
+├── config.json
+└── templates/
+```
+
+最终单 EXE 版本会在闭环验收后把模板嵌入可执行文件；本阶段保留外部模板，便于采样和调参。
 
 ## 当前操作
 

@@ -21,12 +21,12 @@ bool Ui::create(HINSTANCE instance, std::wstring& error) {
     if (!window_) { error = L"创建主窗口失败"; return false; }
     CreateWindowExW(0, L"STATIC", L"捕获窗口：", WS_CHILD | WS_VISIBLE, 18, 18, 88, 24, window_, nullptr, instance, nullptr);
     windowList_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST, 106, 15, 420, 300, window_, nullptr, instance, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"刷新窗口", WS_CHILD | WS_VISIBLE, 538, 15, 110, 26, window_, reinterpret_cast<HMENU>(kRefreshButtonId), instance, nullptr);
-    roiButton_ = CreateWindowExW(0, L"BUTTON", L"框选 ROI", WS_CHILD | WS_VISIBLE, 18, 54, 120, 30, window_, reinterpret_cast<HMENU>(kRoiButtonId), instance, nullptr);
+    CreateWindowExW(0, L"BUTTON", L"刷新窗口", WS_CHILD | WS_VISIBLE, 538, 15, 110, 26, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRefreshButtonId)), instance, nullptr);
+    roiButton_ = CreateWindowExW(0, L"BUTTON", L"框选 ROI", WS_CHILD | WS_VISIBLE, 18, 54, 120, 30, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRoiButtonId)), instance, nullptr);
     preview_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"STATIC", L"ROI Preview", WS_CHILD | WS_VISIBLE | SS_BITMAP | SS_CENTERIMAGE, 470, 56, 178, 118, window_, nullptr, instance, nullptr);
     status_ = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 18, 98, 435, 235, window_, nullptr, instance, nullptr);
-    startButton_ = CreateWindowExW(0, L"BUTTON", L"START (F10)", WS_CHILD | WS_VISIBLE, 18, 350, 120, 32, window_, reinterpret_cast<HMENU>(kStartButtonId), instance, nullptr);
-    stopButton_ = CreateWindowExW(0, L"BUTTON", L"STOP (F11)", WS_CHILD | WS_VISIBLE, 150, 350, 120, 32, window_, reinterpret_cast<HMENU>(kStopButtonId), instance, nullptr);
+    startButton_ = CreateWindowExW(0, L"BUTTON", L"START (F10)", WS_CHILD | WS_VISIBLE, 18, 350, 120, 32, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStartButtonId)), instance, nullptr);
+    stopButton_ = CreateWindowExW(0, L"BUTTON", L"STOP (F11)", WS_CHILD | WS_VISIBLE, 150, 350, 120, 32, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStopButtonId)), instance, nullptr);
     if (!status_ || !startButton_ || !stopButton_ || !windowList_ || !roiButton_ || !preview_) { error = L"创建界面控件失败"; DestroyWindow(window_); window_ = nullptr; return false; }
     ShowWindow(window_, SW_SHOW); UpdateWindow(window_); return true;
 }

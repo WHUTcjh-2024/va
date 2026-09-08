@@ -62,7 +62,7 @@ constexpr int kMaxTemplateDimension = 256;
 [[nodiscard]] int scaledCoordinate(int sourceSize, int templateCoordinate, int templateSize) noexcept { return std::min(sourceSize - 1, (templateCoordinate * sourceSize) / templateSize); }
 } // namespace
 
-Recognizer::Recognizer() : avx2Available_{cpuHasAvx2()} { std::wstring ignored; (void)loadTemplates(L"templates", ignored); }
+Recognizer::Recognizer() : avx2Available_{cpuHasAvx2()} {}
 Recognizer::~Recognizer() = default;
 
 bool Recognizer::loadTemplates(const std::filesystem::path& directory, std::wstring& error) {

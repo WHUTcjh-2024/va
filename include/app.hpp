@@ -8,6 +8,8 @@
 #include "timer.hpp"
 #include "ui.hpp"
 
+#include <atomic>
+#include <filesystem>
 #include <optional>
 
 namespace valinvite {
@@ -15,9 +17,8 @@ namespace valinvite {
 class App final {
 public:
     explicit App(HINSTANCE instance);
+    ~App();
     [[nodiscard]] int run();
-    // Capture/recognition workers call this on the UI thread after extracting text from a frame.
-    void onRecognizedText(std::string_view code, double recognitionMs);
     void onCandidate(const Candidate& candidate);
 
 private:
@@ -27,10 +28,13 @@ private:
     void persistCalibration();
     void reportWarning(const std::wstring& message);
     void applyPerformancePolicy();
+    void onFrame(const BgraRoiFrame& frame);
+    void processRecognizedCandidate(Candidate candidate, double recognitionMs);
 
     HINSTANCE instance_{};
+    std::filesystem::path resourceDirectory_;
     Config config_{};
-    ConfigStore configStore_{L"config.json"};
+    ConfigStore configStore_;
     Calibrator calibrator_{};
     Capture capture_{};
     Recognizer recognizer_{};
@@ -42,6 +46,7 @@ private:
     std::optional<std::string> pendingCandidate_;
     std::optional<std::string> lastSubmittedCode_;
     std::wstring lastError_;
+    std::atomic_bool acceptingFrames_{false};
 };
 
 } // namespace valinvite
