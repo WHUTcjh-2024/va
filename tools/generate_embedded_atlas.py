@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 CANVAS = 32
 CONTENT = 28
+FOREGROUND_THRESHOLD = 32
 EXPECTED_FONT_SHA256 = "0f7b311b2f3279e4eef9b2f968bcdbab6e28f4daeb1f049f4f278a902bcd82f7"
 
 
@@ -110,7 +111,8 @@ def resize_bilinear(source: np.ndarray, width: int, height: int) -> np.ndarray:
 
 def normalize(raw: Image.Image, variant: Variant) -> np.ndarray:
     pixels = np.asarray(raw, dtype=np.uint8)
-    ys, xs = np.nonzero(pixels > 4)
+    pixels = np.where(pixels > FOREGROUND_THRESHOLD, pixels, 0).astype(np.uint8)
+    ys, xs = np.nonzero(pixels)
     if len(xs) == 0:
         raise RuntimeError("empty rendered glyph after thresholding")
     cropped = pixels[
