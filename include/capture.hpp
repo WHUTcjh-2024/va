@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 namespace valinvite {
 
@@ -51,6 +52,8 @@ private:
     std::shared_ptr<Session> session_;
     FrameCallback frameCallback_;
     PreviewCallback previewCallback_;
+    bool apartmentInitialized_{};
+    std::thread::id apartmentThread_{};
 };
 
 } // namespace valinvite
