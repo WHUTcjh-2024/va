@@ -24,6 +24,7 @@ namespace valinvite {
 namespace {
 constexpr std::array<char, 36> kAlphabet{'A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z','0','1','2','3','4','5','6','7','8','9'};
 constexpr std::array<char, 4> kTemplateMagic{'V', 'I', 'T', '1'};
+constexpr int kMaxTemplateDimension = 256;
 
 [[nodiscard]] bool allowedInSlot(int slot, char value) noexcept { return slot < 3 ? value >= 'A' && value <= 'Z' : value >= '0' && value <= '9'; }
 [[nodiscard]] std::uint16_t readU16(std::istream& stream) {
@@ -83,13 +84,14 @@ bool Recognizer::loadTemplates(const std::filesystem::path& directory, std::wstr
             if (textFormat) {
                 file.get(); int backgroundValue{};
                 file >> width >> height >> bboxX >> bboxY >> bboxWidth >> bboxHeight >> value >> backgroundValue;
+                if (backgroundValue < 0 || backgroundValue > 255) { error = L"模板背景灰度无效：" + entry.path().wstring(); return false; }
                 background = static_cast<std::uint8_t>(backgroundValue);
                 file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
             } else {
                 width = readU16(file); height = readU16(file); bboxX = readU16(file); bboxY = readU16(file); bboxWidth = readU16(file); bboxHeight = readU16(file);
                 file.read(&value, 1); file.read(reinterpret_cast<char*>(&background), 1);
             }
-            if (!file || value != kAlphabet[index] || width <= 0 || height <= 0 || bboxWidth <= 0 || bboxHeight <= 0 || bboxX + bboxWidth > width || bboxY + bboxHeight > height) { error = L"模板头信息无效：" + entry.path().wstring(); return false; }
+            if (!file || value != kAlphabet[index] || width <= 0 || height <= 0 || width > kMaxTemplateDimension || height > kMaxTemplateDimension || bboxX < 0 || bboxY < 0 || bboxWidth <= 0 || bboxHeight <= 0 || bboxX + bboxWidth > width || bboxY + bboxHeight > height) { error = L"模板头信息无效：" + entry.path().wstring(); return false; }
             Template templ{value, width, height, bboxX, bboxY, bboxWidth, bboxHeight, background, std::vector<std::uint8_t>(static_cast<std::size_t>(width) * static_cast<std::size_t>(height))};
             if (textFormat) {
                 std::size_t pixel{}; char marker{};
@@ -120,6 +122,8 @@ Candidate Recognizer::recognize(const GrayImageView& roi) const {
         float bestScore = -std::numeric_limits<float>::infinity(), secondScore = -std::numeric_limits<float>::infinity(); const Template* bestTemplate{};
         for (int templateId = 0; templateId < static_cast<int>(kAlphabet.size()); ++templateId) {
             if (!allowedInSlot(slot, kAlphabet[templateId])) continue;
+            float characterBest = -std::numeric_limits<float>::infinity();
+            const Template* characterTemplate{};
             for (const Template& templ : templates_[templateId]) {
                 std::uint64_t difference{}; const bool sameShape = slotWidth == templ.width && roi.height == templ.height;
                 if (sameShape && avx2Available_) {
@@ -135,8 +139,10 @@ Candidate Recognizer::recognize(const GrayImageView& roi) const {
                     }
                 }
                 const float score = 1.0F - static_cast<float>(difference) / static_cast<float>(255ULL * templ.pixels.size());
-                if (score > bestScore) { secondScore = bestScore; bestScore = score; bestTemplate = &templ; } else if (score > secondScore) secondScore = score;
+                if (score > characterBest) { characterBest = score; characterTemplate = &templ; }
             }
+            if (characterBest > bestScore) { secondScore = bestScore; bestScore = characterBest; bestTemplate = characterTemplate; }
+            else if (characterBest > secondScore) secondScore = characterBest;
         }
         if (bestTemplate == nullptr) return Candidate{};
         int minX = slotWidth, minY = roi.height, maxX = -1, maxY = -1; const int foregroundDelta = std::max(12, static_cast<int>(std::lround(config_.backgroundThreshold / 2.0)));
@@ -162,8 +168,7 @@ Candidate Recognizer::recognize(const GrayImageView& roi) const {
 Candidate Recognizer::evaluate(std::string_view code) const {
     Candidate candidate{}; candidate.code = code;
     candidate.structureValid = code.size() == 6 && std::all_of(code.begin(), code.begin() + 3, [](char c) { return c >= 'A' && c <= 'Z'; }) && std::all_of(code.begin() + 3, code.end(), [](char c) { return c >= '0' && c <= '9'; });
-    for (std::size_t index = 0; index < candidate.slots.size() && index < code.size(); ++index) candidate.slots[index] = MatchResult{code[index], 1.0F, 0.0F, 1.0F, 1, 1};
-    candidate.boundingBoxesComplete = candidate.structureValid; candidate.edgeSlotsComplete = candidate.structureValid; candidate.backgroundProbeOk = candidate.structureValid; candidate.highConfidence = candidate.structureValid; return candidate;
+    return candidate;
 }
 
 bool Recognizer::shouldSubmit(const Candidate& candidate, const std::optional<std::string>& previous) const {
