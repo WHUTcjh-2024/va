@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VAL Invite Benchmark Stream</title>
+  <title>VAL 邀请码测试页</title>
   <style>
     @font-face { font-family: "VAL Montserrat"; src: url("fonts/Montserrat-wght.ttf") format("truetype"); font-weight: 100 900; font-style: normal; font-display: block; }
     :root { color-scheme: dark; font-family: Segoe UI, Microsoft YaHei, sans-serif; background: #0b1117; color: #edf2f7; }
@@ -33,7 +33,7 @@
     </section>
   </main>
   <section class="benchmark-controls">
-    <div class="controls"><label>回合<input id="rounds" type="number" min="1" max="10000" value="100"></label><label>显示 ms<input id="revealMs" type="number" min="0" max="10000" value="800"></label><label>超时 ms<input id="timeoutMs" type="number" min="50" max="30000" value="1500"></label><button id="start">开始</button><button id="stop" class="secondary" disabled>停止</button><button id="download" class="secondary" disabled>导出 CSV</button></div>
+    <div class="controls"><label>测试回合<input id="rounds" type="number" min="1" max="10000" value="100"></label><label>显示时间（毫秒）<input id="revealMs" type="number" min="0" max="10000" value="800"></label><label>超时时间（毫秒）<input id="timeoutMs" type="number" min="50" max="30000" value="1500"></label><button id="start">开始</button><button id="stop" class="secondary" disabled>停止</button><button id="download" class="secondary" disabled>导出结果</button></div>
   </section>
   <p id="state">等待开始</p>
   <div id="summary" aria-live="polite"></div>
@@ -74,8 +74,10 @@
         for (const record of records) counts[record.outcome.toLowerCase()]++;
         const latencies = records.filter((record) => record.outcome === "CORRECT").map((record) => record.latency_ms);
         const stats = { Rounds: records.length, Correct: counts.correct, Wrong: counts.wrong, Early: counts.early, Timeout: counts.timeout, P50: B.formatNumber(B.percentile(latencies, .50)), P95: B.formatNumber(B.percentile(latencies, .95)), P99: B.formatNumber(B.percentile(latencies, .99)) };
+        const labels = { Rounds: "回合", Correct: "正确", Wrong: "错误", Early: "提前提交", Timeout: "超时", P50: "P50 延迟", P95: "P95 延迟", P99: "P99 延迟" };
         elements.summary.replaceChildren(...Object.entries(stats).map(([name, value]) => {
-          const item = document.createElement("span"); item.textContent = `${name} ${value}`; return item;
+          const unit = name.startsWith("P") && value !== "" ? " 毫秒" : "";
+          const item = document.createElement("span"); item.textContent = `${labels[name]} ${value}${unit}`; return item;
         }));
         return stats;
       };
@@ -99,11 +101,11 @@
         for (let roundId = 1; roundId <= settings.rounds && !activeRun.stopped; roundId++) {
           activeRun.roundId = roundId; pendingResult = null;
           await api("/api/open", { roundId });
-          elements.state.textContent = `Round ${roundId}/${settings.rounds}: reveal 中`;
+          elements.state.textContent = `第 ${roundId}/${settings.rounds} 回合：邀请码显示中`;
           const code = await api("/api/code", {});
           await renderCode(code.code, settings.revealMs);
           await api("/api/reveal", {});
-          elements.state.textContent = `Round ${roundId}/${settings.rounds}: 已完全显示，等待提交`;
+          elements.state.textContent = `第 ${roundId}/${settings.rounds} 回合：邀请码已完全显示，等待提交`;
           const deadline = Date.now() + settings.timeoutMs;
           while (!activeRun.stopped && Date.now() < deadline) {
             if ((await api("/api/submitted")).submitted) break;
@@ -115,7 +117,7 @@
         }
         const stopped = activeRun.stopped;
         activeRun = null; setRunning(false); elements.download.disabled = records.length === 0;
-        elements.state.textContent = stopped ? "已停止" : `完成：${records.length} rounds`;
+        elements.state.textContent = stopped ? "已停止" : `完成：共 ${records.length} 个回合`;
       };
       elements.start.addEventListener("click", () => { void run(); });
       elements.stop.addEventListener("click", () => { if (activeRun) activeRun.stopped = true; });
