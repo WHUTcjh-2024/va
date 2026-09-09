@@ -9,6 +9,8 @@ namespace valinvite {
 
 class Ui final {
 public:
+    ~Ui();
+
     static constexpr UINT kCommandMessage = WM_APP + 1;
     static constexpr WPARAM kStartCommand = 1;
     static constexpr WPARAM kStopCommand = 2;
@@ -30,6 +32,7 @@ private:
     HWND stopButton_{};
     HWND windowList_{};
     HWND roiButton_{};
+    HFONT uiFont_{};
 };
 
 } // namespace valinvite
