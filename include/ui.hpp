@@ -21,7 +21,6 @@ public:
         const std::optional<Candidate>& candidate = std::nullopt, std::wstring_view error = {});
     void refreshWindows();
     [[nodiscard]] HWND selectedWindow() const noexcept;
-    [[nodiscard]] bool selectRoi(Rect& roi, std::wstring& error);
     static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
 
 private:
@@ -31,7 +30,6 @@ private:
     HWND stopButton_{};
     HWND windowList_{};
     HWND roiButton_{};
-    HWND preview_{};
 };
 
 } // namespace valinvite

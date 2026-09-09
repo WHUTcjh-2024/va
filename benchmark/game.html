@@ -5,15 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VAL Invite Benchmark Game</title>
   <style>
-    :root { color-scheme: dark; font-family: Segoe UI, Microsoft YaHei, sans-serif; background: #10131a; color: #edf2ff; }
-    body { max-width: 600px; margin: 0 auto; padding: 80px 20px; } form { display: grid; gap: 14px; margin-top: 24px; }
-    input, button { border: 1px solid #46516b; border-radius: 7px; padding: 13px; font: 600 22px Consolas, monospace; text-transform: uppercase; }
-    input { background: #1a2030; color: inherit; letter-spacing: .12em; } button { background: #e05d45; color: white; cursor: pointer; } #status { color: #aeb9d0; }
+    :root { color-scheme: dark; font-family: Segoe UI, Microsoft YaHei, sans-serif; background: #0b1117; color: #edf2f7; }
+    * { box-sizing: border-box; }
+    body { max-width: 380px; margin: 0 auto; padding: 34px 18px; }
+    h1 { margin: 0 0 18px; font-size: 20px; font-weight: 650; }
+    form { display: grid; grid-template-columns: 1fr 86px; gap: 8px; }
+    input, button { height: 40px; border: 1px solid #3d4c5c; border-radius: 6px; padding: 8px 10px; font: 650 17px Arial, sans-serif; text-transform: uppercase; }
+    input { background: #19232d; color: inherit; letter-spacing: 1px; }
+    button { background: #3675e8; color: white; cursor: pointer; }
+    #status { color: #aeb9c5; font-size: 13px; }
   </style>
 </head>
 <body>
-  <h1>VAL Invite Benchmark Game</h1>
-  <p>真实 HTML input 与 JOIN button。此页只记录每轮首次提交。</p>
+  <h1>邀请码输入</h1>
   <form id="join-form"><input id="invite" autocomplete="off" maxlength="6" pattern="[A-Za-z]{3}[0-9]{3}" aria-label="邀请码" autofocus><button id="join" type="submit">JOIN</button></form>
   <p id="status">等待 stream 回合</p>
   <script src="benchmark.js"></script>

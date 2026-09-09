@@ -1,8 +1,8 @@
 # VAL Invite V1
 
-Windows 本地邀请码识别工具。当前已完成 C++20/CMake 工程、Win32 主窗口、DPI 感知、F8/F9 坐标校准、JSON 配置持久化，以及 WGC 捕获、模板识别和 SendInput 的第一版集成。
+完全离线的 Windows 本地邀请码识别工具。使用 WGC 捕获、内嵌 glyph atlas 和 SendInput，不依赖外部字体、模板、OCR 或网络。
 
-界面现可选择目标窗口、拖拽框选 ROI 并预览，F10/F11 分别启动/停止。启动会校验窗口与 ROI，应用线程按配置提升优先级并尝试设置 CPU 亲和性；识别结果通过 `App::onRecognizedText` 进入 Recognizer → Decision → SendInput，失败会提示原因，STOP 后可重新 START Arm。
+界面只保留目标窗口、ROI、快捷键和运行状态。F8/F9 记录输入框与加入按钮位置，F10/F11 启动或停止。
 
 ## 构建
 
@@ -14,25 +14,23 @@ Windows 本地邀请码识别工具。当前已完成 C++20/CMake 工程、Win32
 cmd /d /c 'call "D:\VS2026\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 && cmake -S "D:\Desktop\抢码脚本" -B "%LOCALAPPDATA%\valinvite-build" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release && cmake --build "%LOCALAPPDATA%\valinvite-build"'
 ```
 
-生成文件位于 `%LOCALAPPDATA%\valinvite-build`。构建会把 `config.json` 与 `templates` 自动复制到 EXE 同目录；程序始终从 EXE 所在目录加载这些资源，因此可以从任意工作目录启动。
+生成文件位于 `%LOCALAPPDATA%\valinvite-build`。运行时只需 `VALInvite.exe`，用户配置保存在 `%LOCALAPPDATA%\VALInvite\config.json`。
 
 当前便携目录结构：
 
 ```text
 valinvite-build/
-├── VALInvite.exe
-├── config.json
-└── templates/
+└── VALInvite.exe
 ```
 
-最终单 EXE 版本会在闭环验收后把模板嵌入可执行文件；本阶段保留外部模板，便于采样和调参。
+完整 A-Z / 0-9 atlas 已编译进 EXE；仓库中的字体与 Python 工具仅用于开发期生成和回归。
 
 ## 当前操作
 
-- `F8`：记录鼠标当前位置为邀请码输入框坐标，并写回 `config.json`。
-- `F9`：记录鼠标当前位置为 Join 按钮坐标，并写回 `config.json`。
+- `F8`：记录鼠标当前位置为邀请码输入框坐标。
+- `F9`：记录鼠标当前位置为 Join 按钮坐标。
 
-`config.json` 是唯一配置源；识别阈值、ROI、输入坐标、提交方式和性能选项均已定义，后续模块直接复用。
+ROI 以目标窗口 Client Area 的归一化比例保存，窗口尺寸变化后重新 START 即可同比例还原。
 
 ## 本地闭环 benchmark
 
