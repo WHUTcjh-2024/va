@@ -24,6 +24,11 @@ http.createServer(async (req, res) => {
   const contentType = file.endsWith(".html") ? "text/html; charset=utf-8"
     : file.endsWith(".js") ? "application/javascript; charset=utf-8"
     : file.endsWith(".ttf") ? "font/ttf" : "application/octet-stream";
-  res.writeHead(200, { "content-type": contentType });
+  res.writeHead(200, {
+    "content-type": contentType,
+    "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
+    "pragma": "no-cache",
+    "expires": "0",
+  });
   fs.createReadStream(file).pipe(res);
 }).listen(8787, "127.0.0.1", () => console.log("Benchmark: http://127.0.0.1:8787/stream.html"));
