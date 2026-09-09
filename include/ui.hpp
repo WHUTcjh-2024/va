@@ -4,6 +4,7 @@
 
 #include <string>
 #include <optional>
+#include <vector>
 
 namespace valinvite {
 
@@ -28,6 +29,18 @@ public:
     static LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
 
 private:
+    struct ControlLayout final {
+        HWND window{};
+        int x{};
+        int y{};
+        int width{};
+        int height{};
+    };
+
+    void applyDpi(UINT dpi);
+    void layoutControls(UINT dpi) const noexcept;
+    void replaceFont(UINT dpi);
+
     HWND window_{};
     HWND status_{};
     HWND startButton_{};
@@ -37,6 +50,7 @@ private:
     HWND inputButton_{};
     HWND joinButton_{};
     HFONT uiFont_{};
+    std::vector<ControlLayout> controls_;
 };
 
 } // namespace valinvite

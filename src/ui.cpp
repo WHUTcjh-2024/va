@@ -2,10 +2,13 @@
 
 #include <iterator>
 #include <string>
+#include <utility>
 
 namespace valinvite {
 namespace {
 constexpr wchar_t kWindowClass[] = L"VALInviteWindow";
+constexpr int kLogicalWidth = 720;
+constexpr int kLogicalHeight = 420;
 constexpr int kStartButtonId = 1001, kStopButtonId = 1002, kRefreshButtonId = 1003, kRoiButtonId = 1004,
     kInputButtonId = 1005, kJoinButtonId = 1006;
 struct WindowEnumerationContext final {
@@ -36,20 +39,21 @@ bool Ui::create(HINSTANCE instance, std::wstring& error) {
     WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = windowProc; wc.hInstance = instance; wc.hCursor = LoadCursor(nullptr, IDC_ARROW); wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1); wc.lpszClassName = kWindowClass;
     if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) { error = L"注册主窗口失败"; return false; }
     constexpr DWORD windowStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
-    window_ = CreateWindowExW(0, kWindowClass, L"VAL Invite", windowStyle, CW_USEDEFAULT, CW_USEDEFAULT, 720, 420, nullptr, nullptr, instance, nullptr);
+    window_ = CreateWindowExW(0, kWindowClass, L"VAL Invite", windowStyle, CW_USEDEFAULT, CW_USEDEFAULT,
+        kLogicalWidth, kLogicalHeight, nullptr, nullptr, instance, this);
     if (!window_) { error = L"创建主窗口失败"; return false; }
     const UINT dpi = GetDpiForWindow(window_);
     const auto scaled = [dpi](int value) noexcept { return MulDiv(value, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI); };
-    RECT desiredClient{0, 0, scaled(720), scaled(420)};
+    RECT desiredClient{0, 0, scaled(kLogicalWidth), scaled(kLogicalHeight)};
     if (AdjustWindowRectExForDpi(&desiredClient, windowStyle, FALSE, 0, GetDpiForWindow(window_))) {
         SetWindowPos(window_, nullptr, 0, 0, desiredClient.right - desiredClient.left, desiredClient.bottom - desiredClient.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
-    uiFont_ = CreateFontW(-MulDiv(10, static_cast<int>(dpi), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-
     const auto createControl = [&](const wchar_t* className, const wchar_t* text, DWORD style,
                                    int x, int y, int width, int height, int id = 0) {
-        return CreateWindowExW(0, className, text, style, scaled(x), scaled(y), scaled(width), scaled(height),
+        const HWND control = CreateWindowExW(0, className, text, style, 0, 0, 0, 0,
             window_, id ? reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)) : nullptr, instance, nullptr);
+        if (control) controls_.push_back({control, x, y, width, height});
+        return control;
     };
 
     createControl(L"BUTTON", L"捕获来源", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 20, 14, 680, 132);
@@ -71,12 +75,47 @@ bool Ui::create(HINSTANCE instance, std::wstring& error) {
     stopButton_ = createControl(L"BUTTON", L"停止  F11", WS_CHILD | WS_VISIBLE, 190, 370, 154, 38, kStopButtonId);
     createControl(L"STATIC", L"启动后保持邀请码来源窗口可见", WS_CHILD | WS_VISIBLE, 376, 378, 310, 24);
     if (!status_ || !startButton_ || !stopButton_ || !windowList_ || !roiButton_ || !inputButton_ || !joinButton_) { error = L"创建界面控件失败"; DestroyWindow(window_); window_ = nullptr; return false; }
-    const HFONT font = uiFont_ ? uiFont_ : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-    EnumChildWindows(window_, [](HWND child, LPARAM value) -> BOOL { SendMessageW(child, WM_SETFONT, static_cast<WPARAM>(value), TRUE); return TRUE; }, reinterpret_cast<LPARAM>(font));
+    applyDpi(dpi);
     ShowWindow(window_, SW_SHOW); UpdateWindow(window_); return true;
 }
 Ui::~Ui() { if (uiFont_) DeleteObject(uiFont_); }
 HWND Ui::window() const noexcept { return window_; }
+
+void Ui::layoutControls(UINT dpi) const noexcept {
+    for (const ControlLayout& control : controls_) {
+        const auto scale = [dpi](int value) noexcept {
+            return MulDiv(value, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
+        };
+        MoveWindow(
+            control.window,
+            scale(control.x),
+            scale(control.y),
+            scale(control.width),
+            scale(control.height),
+            FALSE
+        );
+    }
+}
+
+void Ui::replaceFont(UINT dpi) {
+    HFONT next = CreateFontW(-MulDiv(10, static_cast<int>(dpi), 72), 0, 0, 0,
+        FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    if (!next) return;
+
+    for (const ControlLayout& control : controls_) {
+        SendMessageW(control.window, WM_SETFONT, reinterpret_cast<WPARAM>(next), FALSE);
+    }
+    const HFONT previous = std::exchange(uiFont_, next);
+    if (previous) DeleteObject(previous);
+}
+
+void Ui::applyDpi(UINT dpi) {
+    if (dpi == 0) dpi = USER_DEFAULT_SCREEN_DPI;
+    layoutControls(dpi);
+    replaceFont(dpi);
+    RedrawWindow(window_, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
+}
 void Ui::refreshWindows() {
     const HWND previous = selectedWindow();
     SendMessageW(windowList_, CB_RESETCONTENT, 0, 0);
@@ -172,6 +211,20 @@ void Ui::update(
 }
 
 LRESULT CALLBACK Ui::windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == WM_NCCREATE) {
+        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lParam);
+        SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+    }
+    auto* ui = reinterpret_cast<Ui*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+
+    if (message == WM_DPICHANGED) {
+        const auto* suggested = reinterpret_cast<const RECT*>(lParam);
+        SetWindowPos(window, nullptr, suggested->left, suggested->top,
+            suggested->right - suggested->left, suggested->bottom - suggested->top,
+            SWP_NOZORDER | SWP_NOACTIVATE);
+        if (ui) ui->applyDpi(HIWORD(wParam));
+        return 0;
+    }
     if (message == WM_COMMAND && HIWORD(wParam) == BN_CLICKED) {
         const WORD id = LOWORD(wParam);
         WPARAM command =
@@ -189,6 +242,9 @@ LRESULT CALLBACK Ui::windowProc(HWND window, UINT message, WPARAM wParam, LPARAM
     if (message == WM_DESTROY) {
         PostQuitMessage(0);
         return 0;
+    }
+    if (message == WM_NCDESTROY) {
+        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
     }
     return DefWindowProcW(window, message, wParam, lParam);
 }
