@@ -18,16 +18,21 @@ BOOL CALLBACK addWindow(HWND window, LPARAM value) { const auto& context = *rein
 bool Ui::create(HINSTANCE instance, std::wstring& error) {
     WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = windowProc; wc.hInstance = instance; wc.hCursor = LoadCursor(nullptr, IDC_ARROW); wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1); wc.lpszClassName = kWindowClass;
     if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) { error = L"注册主窗口失败"; return false; }
-    window_ = CreateWindowExW(0, kWindowClass, L"VAL Invite", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 560, 285, nullptr, nullptr, instance, nullptr);
+    constexpr DWORD windowStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+    window_ = CreateWindowExW(0, kWindowClass, L"VAL Invite", windowStyle, CW_USEDEFAULT, CW_USEDEFAULT, 560, 320, nullptr, nullptr, instance, nullptr);
     if (!window_) { error = L"创建主窗口失败"; return false; }
-    CreateWindowExW(0, L"STATIC", L"窗口", WS_CHILD | WS_VISIBLE, 18, 21, 60, 22, window_, nullptr, instance, nullptr);
-    windowList_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST, 76, 17, 358, 260, window_, nullptr, instance, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"刷新", WS_CHILD | WS_VISIBLE, 446, 17, 88, 27, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRefreshButtonId)), instance, nullptr);
-    roiButton_ = CreateWindowExW(0, L"BUTTON", L"框选邀请码", WS_CHILD | WS_VISIBLE, 18, 58, 132, 30, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRoiButtonId)), instance, nullptr);
-    CreateWindowExW(0, L"STATIC", L"F8 输入框  ·  F9 加入按钮", WS_CHILD | WS_VISIBLE, 166, 65, 360, 22, window_, nullptr, instance, nullptr);
-    status_ = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 18, 104, 516, 84, window_, nullptr, instance, nullptr);
-    startButton_ = CreateWindowExW(0, L"BUTTON", L"启动  F10", WS_CHILD | WS_VISIBLE, 18, 207, 112, 32, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStartButtonId)), instance, nullptr);
-    stopButton_ = CreateWindowExW(0, L"BUTTON", L"停止  F11", WS_CHILD | WS_VISIBLE, 142, 207, 112, 32, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStopButtonId)), instance, nullptr);
+    RECT desiredClient{0, 0, 540, 252};
+    if (AdjustWindowRectExForDpi(&desiredClient, windowStyle, FALSE, 0, GetDpiForWindow(window_))) {
+        SetWindowPos(window_, nullptr, 0, 0, desiredClient.right - desiredClient.left, desiredClient.bottom - desiredClient.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    CreateWindowExW(0, L"STATIC", L"邀请码来源", WS_CHILD | WS_VISIBLE, 16, 20, 82, 22, window_, nullptr, instance, nullptr);
+    windowList_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST, 100, 16, 326, 240, window_, nullptr, instance, nullptr);
+    CreateWindowExW(0, L"BUTTON", L"刷新", WS_CHILD | WS_VISIBLE, 438, 16, 86, 28, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRefreshButtonId)), instance, nullptr);
+    roiButton_ = CreateWindowExW(0, L"BUTTON", L"框选邀请码", WS_CHILD | WS_VISIBLE, 16, 57, 128, 30, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kRoiButtonId)), instance, nullptr);
+    CreateWindowExW(0, L"STATIC", L"F8 记录输入框  ·  F9 记录加入按钮", WS_CHILD | WS_VISIBLE, 160, 64, 364, 22, window_, nullptr, instance, nullptr);
+    status_ = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 16, 103, 508, 74, window_, nullptr, instance, nullptr);
+    startButton_ = CreateWindowExW(0, L"BUTTON", L"启动  F10", WS_CHILD | WS_VISIBLE, 16, 198, 112, 34, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStartButtonId)), instance, nullptr);
+    stopButton_ = CreateWindowExW(0, L"BUTTON", L"停止  F11", WS_CHILD | WS_VISIBLE, 140, 198, 112, 34, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStopButtonId)), instance, nullptr);
     if (!status_ || !startButton_ || !stopButton_ || !windowList_ || !roiButton_) { error = L"创建界面控件失败"; DestroyWindow(window_); window_ = nullptr; return false; }
     EnumChildWindows(window_, [](HWND child, LPARAM) -> BOOL { SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE); return TRUE; }, 0);
     ShowWindow(window_, SW_SHOW); UpdateWindow(window_); return true;
@@ -66,7 +71,7 @@ void Ui::update(
     SetWindowTextW(
         window_,
         (
-            std::wstring{L"VAL Invite · "} + stateText(state)
+            std::wstring{L"VAL Invite"}
         ).c_str()
     );
 
@@ -76,12 +81,16 @@ void Ui::update(
                 candidate->code.begin(),
                 candidate->code.end()
             )
-            : L"-";
+            : L"—";
 
     const bool roiReady = config.normalizedRoi.valid() || config.roi.valid();
-    std::wstring status = std::wstring{L"状态  "} + stateText(state) +
-        L"\r\n邀请码  " + code +
-        L"\r\nROI  " + (roiReady ? L"已设置" : L"未设置");
+    const bool inputReady = config.inputPoint.x != 0 || config.inputPoint.y != 0;
+    const bool joinReady = config.joinPoint.x != 0 || config.joinPoint.y != 0;
+    std::wstring status = std::wstring{L"状态："} + stateText(state) +
+        L"\r\n识别：" + code +
+        L"\r\n设置：ROI " + (roiReady ? L"已设" : L"未设") +
+        L"  ·  输入框 " + (inputReady ? L"已设" : L"未设") +
+        L"  ·  加入按钮 " + (joinReady ? L"已设" : L"未设");
 
     if (!error.empty()) {
         status +=
