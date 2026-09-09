@@ -84,6 +84,38 @@ struct Features final {
     return wideM;
 }
 
+[[nodiscard]] bool looksLikeQTail(
+    const std::array<std::uint8_t, kPixels>& glyph
+) noexcept {
+    int left = kCanvas;
+    int right = -1;
+    int bottom = -1;
+    for (int y = 0; y < kCanvas; ++y) {
+        for (int x = 0; x < kCanvas; ++x) {
+            if (glyph[static_cast<std::size_t>(y) * kCanvas + x] <= 32) continue;
+            left = std::min(left, x);
+            right = std::max(right, x);
+            bottom = y;
+        }
+    }
+    if (right < left || bottom < 0) return false;
+
+    int tailLeft = kCanvas;
+    int tailRight = -1;
+    int tailPixels = 0;
+    for (int x = 0; x < kCanvas; ++x) {
+        if (glyph[static_cast<std::size_t>(bottom) * kCanvas + x] <= 32) continue;
+        tailLeft = std::min(tailLeft, x);
+        tailRight = std::max(tailRight, x);
+        ++tailPixels;
+    }
+
+    const int width = right - left + 1;
+    return tailRight >= tailLeft &&
+        tailLeft >= left + (width * 3) / 5 &&
+        tailPixels <= std::max(2, width / 3);
+}
+
 [[nodiscard]] int foregroundDelta(const RecognitionConfig& config) noexcept {
     return std::max(
         32,
@@ -438,6 +470,7 @@ Candidate Recognizer::recognize(const GrayImageView& roi) const {
     for (int slot = 0; slot < kRequiredGlyphs; ++slot) {
         normalizeGlyph(roi, runs[slot], background, threshold, normalized);
         const Features candidateFeatures = makeFeatures(normalized.data());
+        const bool qTail = slot < 3 && looksLikeQTail(normalized);
         float bestScore = -std::numeric_limits<float>::infinity();
         float secondScore = -std::numeric_limits<float>::infinity();
         char bestValue{};
@@ -459,6 +492,12 @@ Candidate Recognizer::recognize(const GrayImageView& roi) const {
                         impl_->features[glyph][variant]
                     )
                 );
+            }
+            // Browser rasterization leaves Q's short lower-right tail thinner
+            // than the font atlas. Preserve that structural evidence so Q is
+            // not flattened into O on real captured frames.
+            if (value == 'Q' && qTail) {
+                characterBest = std::min(1.0F, characterBest + 0.10F);
             }
             if (characterBest > bestScore) {
                 secondScore = bestScore;

@@ -6,6 +6,23 @@
 namespace {
 
 constexpr LONG kAbsoluteMouseRange = 65535;
+constexpr std::size_t kMaximumInputEvents = 24;
+
+class InputBatch final {
+public:
+    [[nodiscard]] bool push(const INPUT& input) noexcept {
+        if (size_ >= inputs_.size()) return false;
+        inputs_[size_++] = input;
+        return true;
+    }
+
+    [[nodiscard]] INPUT* data() noexcept { return inputs_.data(); }
+    [[nodiscard]] std::size_t size() const noexcept { return size_; }
+
+private:
+    std::array<INPUT, kMaximumInputEvents> inputs_{};
+    std::size_t size_{};
+};
 
 bool screenPointToAbsolute(const valinvite::Point& point, LONG& x, LONG& y) {
     const int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
@@ -23,45 +40,46 @@ bool screenPointToAbsolute(const valinvite::Point& point, LONG& x, LONG& y) {
     return true;
 }
 
-bool appendClick(std::array<INPUT, 24>& inputs, std::size_t& count, const valinvite::Point& point) {
+bool appendClick(InputBatch& inputs, const valinvite::Point& point) {
     LONG x{};
     LONG y{};
     if (!screenPointToAbsolute(point, x, y)) return false;
-    const DWORD flags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-    INPUT& move = inputs[count++];
+    INPUT move{};
     move.type = INPUT_MOUSE;
     move.mi.dx = x;
     move.mi.dy = y;
-    move.mi.dwFlags = flags | MOUSEEVENTF_MOVE;
-    INPUT& down = inputs[count++];
+    move.mi.dwFlags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE;
+    INPUT down{};
     down.type = INPUT_MOUSE;
-    down.mi.dwFlags = flags | MOUSEEVENTF_LEFTDOWN;
-    INPUT& up = inputs[count++];
+    down.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+    INPUT up{};
     up.type = INPUT_MOUSE;
-    up.mi.dwFlags = flags | MOUSEEVENTF_LEFTUP;
-    return true;
+    up.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+    return inputs.push(move) && inputs.push(down) && inputs.push(up);
 }
 
-void appendVirtualKey(std::array<INPUT, 24>& inputs, std::size_t& count, WORD key) {
-    INPUT& down = inputs[count++];
+bool appendVirtualKey(InputBatch& inputs, WORD key) {
+    INPUT down{};
     down.type = INPUT_KEYBOARD;
     down.ki.wVk = key;
-    INPUT& up = inputs[count++];
+    INPUT up{};
     up.type = INPUT_KEYBOARD;
     up.ki.wVk = key;
     up.ki.dwFlags = KEYEVENTF_KEYUP;
+    return inputs.push(down) && inputs.push(up);
 }
 
-void appendUnicodeCharacter(std::array<INPUT, 24>& inputs, std::size_t& count, char character) {
+bool appendUnicodeCharacter(InputBatch& inputs, char character) {
     const WORD value = static_cast<WORD>(static_cast<unsigned char>(character));
-    INPUT& down = inputs[count++];
+    INPUT down{};
     down.type = INPUT_KEYBOARD;
     down.ki.wScan = value;
     down.ki.dwFlags = KEYEVENTF_UNICODE;
-    INPUT& up = inputs[count++];
+    INPUT up{};
     up.type = INPUT_KEYBOARD;
     up.ki.wScan = value;
     up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+    return inputs.push(down) && inputs.push(up);
 }
 
 } // namespace
@@ -90,32 +108,47 @@ bool InputDispatcher::submit(std::string_view code, const Config& config, std::w
         return false;
     }
 
-    std::array<INPUT, 24> inputs{};
-    std::size_t count{};
-    if (!appendClick(inputs, count, config.inputPoint)) {
+    InputBatch inputs;
+    if (!appendClick(inputs, config.inputPoint)) {
         error = L"无法转换输入框屏幕坐标";
         return false;
     }
-    INPUT& controlDown = inputs[count++];
+    INPUT controlDown{};
     controlDown.type = INPUT_KEYBOARD;
     controlDown.ki.wVk = VK_CONTROL;
-    appendVirtualKey(inputs, count, 'A');
-    INPUT& controlUp = inputs[count++];
+    if (!inputs.push(controlDown) || !appendVirtualKey(inputs, 'A')) {
+        error = L"输入事件过多";
+        return false;
+    }
+    INPUT controlUp{};
     controlUp.type = INPUT_KEYBOARD;
     controlUp.ki.wVk = VK_CONTROL;
     controlUp.ki.dwFlags = KEYEVENTF_KEYUP;
-    for (const char character : code) appendUnicodeCharacter(inputs, count, character);
+    if (!inputs.push(controlUp)) {
+        error = L"输入事件过多";
+        return false;
+    }
+    for (const char character : code) {
+        if (!appendUnicodeCharacter(inputs, character)) {
+            error = L"输入事件过多";
+            return false;
+        }
+    }
     if (config.submitMode == SubmitMode::Enter) {
-        appendVirtualKey(inputs, count, VK_RETURN);
+        if (!appendVirtualKey(inputs, VK_RETURN)) {
+            error = L"输入事件过多";
+            return false;
+        }
     } else {
-        if (!appendClick(inputs, count, config.joinPoint)) {
+        if (!appendClick(inputs, config.joinPoint)) {
             error = L"无法转换 Join 屏幕坐标";
             return false;
         }
     }
 
-    const UINT sent = SendInput(static_cast<UINT>(count), inputs.data(), sizeof(INPUT));
-    if (sent != static_cast<UINT>(count)) {
+    const UINT count = static_cast<UINT>(inputs.size());
+    const UINT sent = SendInput(count, inputs.data(), sizeof(INPUT));
+    if (sent != count) {
         error = L"SendInput 未完整发送（" + std::to_wstring(sent) + L"/" + std::to_wstring(count)
             + L"，错误 " + std::to_wstring(GetLastError()) + L"）";
         return false;
