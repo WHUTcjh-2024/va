@@ -1,6 +1,7 @@
 #include "capture.hpp"
 
 #include <d3d11.h>
+#include <dwmapi.h>
 #include <dxgi1_2.h>
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
@@ -80,10 +81,8 @@ bool roiFitsClientArea(HWND window, const Rect& roi) noexcept {
 bool clientOriginInCapture(HWND window, UINT sourceWidth, UINT sourceHeight, POINT& origin) noexcept {
     ThreadDpiContext dpi;
     RECT clientRect{};
-    RECT windowRect{};
     POINT clientTopLeft{};
-    if (!GetClientRect(window, &clientRect) || !GetWindowRect(window, &windowRect)
-        || !ClientToScreen(window, &clientTopLeft)) {
+    if (!GetClientRect(window, &clientRect) || !ClientToScreen(window, &clientTopLeft)) {
         return false;
     }
     const SIZE client{clientRect.right - clientRect.left, clientRect.bottom - clientRect.top};
@@ -95,10 +94,28 @@ bool clientOriginInCapture(HWND window, UINT sourceWidth, UINT sourceHeight, POI
         origin = {};
         return true;
     }
-    const POINT inWindow{clientTopLeft.x - windowRect.left, clientTopLeft.y - windowRect.top};
-    if (!isInside(inWindow, client, sourceWidth, sourceHeight)) return false;
-    origin = inWindow;
-    return true;
+
+    const auto tryBounds = [&](const RECT& bounds) noexcept {
+        const POINT candidate{clientTopLeft.x - bounds.left, clientTopLeft.y - bounds.top};
+        if (!isInside(candidate, client, sourceWidth, sourceHeight)) return false;
+        origin = candidate;
+        return true;
+    };
+
+    // WGC captures the visible DWM frame. GetWindowRect may additionally include
+    // invisible resize borders, which makes a valid client area appear wider
+    // than the captured texture after a DPI/monitor transition.
+    RECT visibleFrame{};
+    if (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS,
+            &visibleFrame, sizeof(visibleFrame)))
+        && tryBounds(visibleFrame)) {
+        return true;
+    }
+
+    // Keep compatibility with providers/windows that do use the full Win32
+    // window rectangle rather than the compositor's visible frame.
+    RECT windowRect{};
+    return GetWindowRect(window, &windowRect) && tryBounds(windowRect);
 }
 } // namespace
 

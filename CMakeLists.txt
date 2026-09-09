@@ -57,6 +57,7 @@ target_compile_definitions(VALInviteRegression PRIVATE
 
 target_link_libraries(VALInvite PRIVATE
     d3d11
+    dwmapi
     dxgi
     windowsapp
     user32
