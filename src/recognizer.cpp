@@ -93,38 +93,15 @@ struct Features final {
 
 [[nodiscard]] std::uint8_t estimateBackground(const GrayImageView& roi) noexcept {
     std::array<std::uint32_t, 256> histogram{};
-    std::uint32_t samples{};
-    const auto add = [&histogram, &samples](std::uint8_t value) noexcept {
-        ++histogram[value];
-        ++samples;
-    };
-
-    const auto* top = roi.pixels;
-    const auto* bottom =
-        roi.pixels + static_cast<std::ptrdiff_t>(roi.height - 1) * roi.stride;
-    for (int x = 0; x < roi.width; ++x) {
-        add(top[x]);
-        if (roi.height > 1) {
-            add(bottom[x]);
-        }
-    }
-    for (int y = 1; y + 1 < roi.height; ++y) {
+    for (int y = 0; y < roi.height; ++y) {
         const auto* row = roi.pixels + static_cast<std::ptrdiff_t>(y) * roi.stride;
-        add(row[0]);
-        if (roi.width > 1) {
-            add(row[roi.width - 1]);
+        for (int x = 0; x < roi.width; ++x) {
+            ++histogram[row[x]];
         }
     }
 
-    const std::uint32_t middle = samples / 2;
-    std::uint32_t accumulated{};
-    for (std::size_t value = 0; value < histogram.size(); ++value) {
-        accumulated += histogram[value];
-        if (accumulated > middle) {
-            return static_cast<std::uint8_t>(value);
-        }
-    }
-    return 0;
+    const auto background = std::max_element(histogram.begin(), histogram.end());
+    return static_cast<std::uint8_t>(std::distance(histogram.begin(), background));
 }
 
 [[nodiscard]] int pixelDelta(std::uint8_t value, std::uint8_t background) noexcept {

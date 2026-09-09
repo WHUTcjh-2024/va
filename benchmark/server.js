@@ -19,5 +19,11 @@ http.createServer(async (req, res) => {
   if (req.method === "GET" && url.pathname === "/api/submitted") return json(res, { submitted: Boolean(active.round?.first) });
   if (req.method === "POST" && url.pathname === "/api/submit") { const body = await read(req); if (!active.round || body.runId !== active.id || body.roundId !== active.round.id || active.round.first) return json(res, { accepted: false }); active.round.first = { code: String(body.code || "").toUpperCase(), at: Date.now() }; return json(res, { accepted: true }); }
   if (req.method === "POST" && url.pathname === "/api/close") { const round = active.round; const submission = round.first; const latency = submission && round.revealedAt ? submission.at - round.revealedAt : null; const outcome = !submission ? "TIMEOUT" : !round.revealedAt || latency < 0 ? "EARLY" : submission.code === round.expected ? "CORRECT" : "WRONG"; active.records.push({ run_id: active.id, round_id: round.id, expected_code: round.expected, submitted_code: submission?.code || "", outcome, t0_unix_ms: round.revealedAt || "", t1_unix_ms: submission?.at || "", latency_ms: latency ?? "" }); fs.writeFileSync(resultPath, ["run_id,round_id,expected_code,submitted_code,outcome,t0_unix_ms,t1_unix_ms,latency_ms", ...active.records.map(record => Object.values(record).map(value => `\"${String(value).replaceAll("\"", "\"\"")}\"`).join(","))].join("\r\n"), "utf8"); active.round = null; return json(res, active.records.at(-1)); }
-  const file = path.join(root, url.pathname === "/" ? "stream.html" : url.pathname.slice(1)); if (!file.startsWith(root) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); } res.writeHead(200, { "content-type": file.endsWith(".html") ? "text/html" : "application/javascript" }); fs.createReadStream(file).pipe(res);
+  const file = path.join(root, url.pathname === "/" ? "stream.html" : url.pathname.slice(1));
+  if (!file.startsWith(root) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
+  const contentType = file.endsWith(".html") ? "text/html; charset=utf-8"
+    : file.endsWith(".js") ? "application/javascript; charset=utf-8"
+    : file.endsWith(".ttf") ? "font/ttf" : "application/octet-stream";
+  res.writeHead(200, { "content-type": contentType });
+  fs.createReadStream(file).pipe(res);
 }).listen(8787, "127.0.0.1", () => console.log("Benchmark: http://127.0.0.1:8787/stream.html"));

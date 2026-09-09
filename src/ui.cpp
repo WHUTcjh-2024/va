@@ -13,7 +13,23 @@ struct WindowEnumerationContext final {
     HWND excluded{};
 };
 const wchar_t* stateText(RunState state) noexcept { switch (state) { case RunState::Setup: return L"待配置"; case RunState::Armed: return L"识别中"; case RunState::Observing: return L"观察中"; case RunState::Candidate: return L"等待确认"; case RunState::Confirmed: return L"已提交"; case RunState::Stopped: return L"已停止"; } return L"未知"; }
-BOOL CALLBACK addWindow(HWND window, LPARAM value) { const auto& context = *reinterpret_cast<const WindowEnumerationContext*>(value); if (window == context.excluded || !IsWindowVisible(window) || GetWindow(window, GW_OWNER)) return TRUE; wchar_t title[256]{}; if (!GetWindowTextW(window, title, static_cast<int>(std::size(title)))) return TRUE; const auto index = SendMessageW(context.combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(title)); if (index != CB_ERR && index != CB_ERRSPACE) SendMessageW(context.combo, CB_SETITEMDATA, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(window)); return TRUE; }
+BOOL CALLBACK addWindow(HWND window, LPARAM value) {
+    const auto& context = *reinterpret_cast<const WindowEnumerationContext*>(value);
+    if (window == context.excluded || !IsWindowVisible(window) || GetWindow(window, GW_OWNER)) return TRUE;
+    const LONG_PTR style = GetWindowLongPtrW(window, GWL_STYLE);
+    RECT client{};
+    if ((style & (WS_CHILD | WS_DISABLED | WS_CAPTION)) != WS_CAPTION || !GetClientRect(window, &client)
+        || client.right - client.left < 320 || client.bottom - client.top < 180) {
+        return TRUE;
+    }
+    wchar_t title[256]{};
+    if (!GetWindowTextW(window, title, static_cast<int>(std::size(title)))) return TRUE;
+    const auto index = SendMessageW(context.combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(title));
+    if (index != CB_ERR && index != CB_ERRSPACE) {
+        SendMessageW(context.combo, CB_SETITEMDATA, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(window));
+    }
+    return TRUE;
+}
 } // namespace
 
 bool Ui::create(HINSTANCE instance, std::wstring& error) {
@@ -68,6 +84,7 @@ void Ui::refreshWindows() {
     EnumWindows(addWindow, reinterpret_cast<LPARAM>(&context));
     const auto count = SendMessageW(windowList_, CB_GETCOUNT, 0, 0);
     LRESULT selection = count > 0 ? 0 : CB_ERR;
+    LRESULT benchmarkSelection = CB_ERR;
     for (LRESULT index = 0; index < count; ++index) {
         const auto candidate = reinterpret_cast<HWND>(
             SendMessageW(windowList_, CB_GETITEMDATA, static_cast<WPARAM>(index), 0)
@@ -76,10 +93,23 @@ void Ui::refreshWindows() {
             selection = index;
             break;
         }
+        wchar_t title[256]{};
+        GetWindowTextW(candidate, title, static_cast<int>(std::size(title)));
+        if (benchmarkSelection == CB_ERR && std::wstring_view{title}.find(L"VAL Invite Benchmark Stream") != std::wstring_view::npos) {
+            benchmarkSelection = index;
+        }
     }
+    if (previous == nullptr && benchmarkSelection != CB_ERR) selection = benchmarkSelection;
     if (selection != CB_ERR) SendMessageW(windowList_, CB_SETCURSEL, static_cast<WPARAM>(selection), 0);
 }
-HWND Ui::selectedWindow() const noexcept { const auto index = SendMessageW(windowList_, CB_GETCURSEL, 0, 0); return index == CB_ERR ? nullptr : reinterpret_cast<HWND>(SendMessageW(windowList_, CB_GETITEMDATA, static_cast<WPARAM>(index), 0)); }
+HWND Ui::selectedWindow() const noexcept {
+    const auto index = SendMessageW(windowList_, CB_GETCURSEL, 0, 0);
+    if (index == CB_ERR) return nullptr;
+    const auto window = reinterpret_cast<HWND>(
+        SendMessageW(windowList_, CB_GETITEMDATA, static_cast<WPARAM>(index), 0)
+    );
+    return IsWindow(window) ? window : nullptr;
+}
 void Ui::update(
     RunState state,
     const Config& config,

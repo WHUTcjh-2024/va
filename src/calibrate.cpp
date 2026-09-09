@@ -141,6 +141,10 @@ bool Calibrator::resolveRoi(const Config& config, HWND window, Rect& roi, std::w
     const int right = std::clamp(static_cast<int>(std::lround((value.x + value.width) * clientWidth)), left + 1, clientWidth);
     const int bottom = std::clamp(static_cast<int>(std::lround((value.y + value.height) * clientHeight)), top + 1, clientHeight);
     roi = {left, top, right - left, bottom - top};
+    if (roi.width < 60 || roi.height < 12) {
+        error = L"邀请码区域过小；目标窗口可能已失效，请刷新窗口列表后重新框选";
+        return false;
+    }
     return true;
 }
 } // namespace valinvite

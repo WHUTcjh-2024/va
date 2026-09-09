@@ -41,3 +41,5 @@ node .\benchmark\server.js
 ```
 
 浏览器打开 `http://127.0.0.1:8787/stream.html` 和 `http://127.0.0.1:8787/game.html`。在 stream 设置回合数（支持 1000）、Reveal 和 Timeout 后启动；在 game 页输入并 JOIN。邀请码仅由 stream 可视化展示，game 页和桌面程序均不读取 DOM 或 BroadcastChannel 答案。服务端严格按每轮第一次提交记录 `CORRECT`、`EARLY`、`WRONG`、`TIMEOUT`，并可下载含所有明细与 P50/P95/P99 统计的 CSV；动画从中心向两侧展开，轮次间含随机等待。
+
+框选邀请码时可以覆盖完整的深色代码框，不需要贴着六码文字描边。测试页使用仓库内置的 Montserrat 开发字体，与 EXE 内嵌字形模板保持一致。
