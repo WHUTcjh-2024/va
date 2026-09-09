@@ -20,9 +20,10 @@ public:
     [[nodiscard]] bool selectCaptureWindowAtCursor(Config& config, std::wstring& error) const;
     // A modal transparent overlay. ROI is saved relative to the Client Area.
     [[nodiscard]] bool selectRoi(Config& config, HWND window, std::wstring& error) const;
+    // Screen-space selections save the centre of the dragged rectangle.
+    [[nodiscard]] bool selectInputPoint(Config& config, std::wstring& error) const;
+    [[nodiscard]] bool selectJoinPoint(Config& config, std::wstring& error) const;
     [[nodiscard]] bool resolveRoi(const Config& config, HWND window, Rect& roi, std::wstring& error) const;
-    void recordInputPoint(Config& config) const noexcept;
-    void recordJoinPoint(Config& config) const noexcept;
 };
 
 } // namespace valinvite

@@ -16,6 +16,8 @@ public:
     static constexpr WPARAM kStopCommand = 2;
     static constexpr WPARAM kSelectWindowCommand = 3;
     static constexpr WPARAM kSelectRoiCommand = 4;
+    static constexpr WPARAM kSelectInputCommand = 5;
+    static constexpr WPARAM kSelectJoinCommand = 6;
 
     [[nodiscard]] bool create(HINSTANCE instance, std::wstring& error);
     [[nodiscard]] HWND window() const noexcept;
@@ -32,6 +34,8 @@ private:
     HWND stopButton_{};
     HWND windowList_{};
     HWND roiButton_{};
+    HWND inputButton_{};
+    HWND joinButton_{};
     HFONT uiFont_{};
 };
 

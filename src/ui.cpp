@@ -6,7 +6,8 @@
 namespace valinvite {
 namespace {
 constexpr wchar_t kWindowClass[] = L"VALInviteWindow";
-constexpr int kStartButtonId = 1001, kStopButtonId = 1002, kRefreshButtonId = 1003, kRoiButtonId = 1004;
+constexpr int kStartButtonId = 1001, kStopButtonId = 1002, kRefreshButtonId = 1003, kRoiButtonId = 1004,
+    kInputButtonId = 1005, kJoinButtonId = 1006;
 struct WindowEnumerationContext final {
     HWND combo{};
     HWND excluded{};
@@ -42,9 +43,10 @@ bool Ui::create(HINSTANCE instance, std::wstring& error) {
     roiButton_ = createControl(L"BUTTON", L"框选邀请码区域", WS_CHILD | WS_VISIBLE, 40, 92, 176, 36, kRoiButtonId);
     createControl(L"STATIC", L"先选择上方窗口，再框住六码文字", WS_CHILD | WS_VISIBLE, 236, 100, 430, 24);
 
-    createControl(L"BUTTON", L"输入位置", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 20, 160, 680, 82);
-    createControl(L"STATIC", L"① 鼠标移到邀请码输入框，按 F8", WS_CHILD | WS_VISIBLE, 40, 194, 306, 26);
-    createControl(L"STATIC", L"② 鼠标移到加入按钮，按 F9", WS_CHILD | WS_VISIBLE, 370, 194, 306, 26);
+    createControl(L"BUTTON", L"提交位置", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 20, 160, 680, 82);
+    inputButton_ = createControl(L"BUTTON", L"框选邀请码输入框", WS_CHILD | WS_VISIBLE, 40, 190, 206, 38, kInputButtonId);
+    joinButton_ = createControl(L"BUTTON", L"框选加入按钮", WS_CHILD | WS_VISIBLE, 264, 190, 190, 38, kJoinButtonId);
+    createControl(L"STATIC", L"可选；不选则按 Enter", WS_CHILD | WS_VISIBLE, 474, 198, 206, 26);
 
     createControl(L"BUTTON", L"运行状态", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 20, 256, 680, 94);
     status_ = createControl(L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT, 40, 282, 640, 60);
@@ -52,7 +54,7 @@ bool Ui::create(HINSTANCE instance, std::wstring& error) {
     startButton_ = createControl(L"BUTTON", L"启动  F10", WS_CHILD | WS_VISIBLE, 20, 370, 154, 38, kStartButtonId);
     stopButton_ = createControl(L"BUTTON", L"停止  F11", WS_CHILD | WS_VISIBLE, 190, 370, 154, 38, kStopButtonId);
     createControl(L"STATIC", L"启动后保持邀请码来源窗口可见", WS_CHILD | WS_VISIBLE, 376, 378, 310, 24);
-    if (!status_ || !startButton_ || !stopButton_ || !windowList_ || !roiButton_) { error = L"创建界面控件失败"; DestroyWindow(window_); window_ = nullptr; return false; }
+    if (!status_ || !startButton_ || !stopButton_ || !windowList_ || !roiButton_ || !inputButton_ || !joinButton_) { error = L"创建界面控件失败"; DestroyWindow(window_); window_ = nullptr; return false; }
     const HFONT font = uiFont_ ? uiFont_ : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     EnumChildWindows(window_, [](HWND child, LPARAM value) -> BOOL { SendMessageW(child, WM_SETFONT, static_cast<WPARAM>(value), TRUE); return TRUE; }, reinterpret_cast<LPARAM>(font));
     ShowWindow(window_, SW_SHOW); UpdateWindow(window_); return true;
@@ -111,7 +113,8 @@ void Ui::update(
         L"    识别：" + code +
         L"\r\nROI " + (roiReady ? L"已设置" : L"未设置") +
         L"    输入框 " + (inputReady ? L"已设置" : L"未设置") +
-        L"    加入按钮 " + (joinReady ? L"已设置" : L"未设置");
+        L"    加入按钮 " + (joinReady ? L"已设置" : L"未设置") +
+        L"    提交 " + (config.submitMode == SubmitMode::ClickJoin ? L"点击按钮" : L"Enter");
 
     if (!error.empty()) {
         status +=
@@ -145,7 +148,9 @@ LRESULT CALLBACK Ui::windowProc(HWND window, UINT message, WPARAM wParam, LPARAM
             id == kStartButtonId ? kStartCommand :
             id == kStopButtonId ? kStopCommand :
             id == kRefreshButtonId ? kSelectWindowCommand :
-            id == kRoiButtonId ? kSelectRoiCommand : 0;
+            id == kRoiButtonId ? kSelectRoiCommand :
+            id == kInputButtonId ? kSelectInputCommand :
+            id == kJoinButtonId ? kSelectJoinCommand : 0;
         if (command) {
             PostMessageW(window, kCommandMessage, command, 0);
             return 0;

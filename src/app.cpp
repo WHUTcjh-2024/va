@@ -10,10 +10,8 @@
 
 namespace valinvite {
 namespace {
-constexpr int kHotkeyInput = 1;
-constexpr int kHotkeyJoin = 2;
-constexpr int kHotkeyStart = 3;
-constexpr int kHotkeyStop = 4;
+constexpr int kHotkeyStart = 1;
+constexpr int kHotkeyStop = 2;
 constexpr UINT kRecognizedCandidateMessage = WM_APP + 2;
 
 struct RecognizedCandidate final {
@@ -50,8 +48,6 @@ int App::run() {
         MessageBoxW(nullptr, error.c_str(), L"VAL Invite", MB_OK | MB_ICONERROR);
         return 1;
     }
-    RegisterHotKey(ui_.window(), kHotkeyInput, 0, VK_F8);
-    RegisterHotKey(ui_.window(), kHotkeyJoin, 0, VK_F9);
     RegisterHotKey(ui_.window(), kHotkeyStart, 0, VK_F10);
     RegisterHotKey(ui_.window(), kHotkeyStop, 0, VK_F11);
     ui_.refreshWindows();
@@ -71,6 +67,24 @@ int App::run() {
                 else if (!roiError.empty()) reportWarning(roiError);
                 ui_.update(state_, config_, timing_, std::nullopt, lastError_);
             }
+            if (message.wParam == Ui::kSelectInputCommand) {
+                if (state_ != RunState::Setup && state_ != RunState::Stopped) stop();
+                std::wstring selectionError;
+                if (calibrator_.selectInputPoint(config_, selectionError)) persistCalibration();
+                else if (!selectionError.empty()) reportWarning(selectionError);
+                ui_.update(state_, config_, timing_, std::nullopt, lastError_);
+            }
+            if (message.wParam == Ui::kSelectJoinCommand) {
+                if (state_ != RunState::Setup && state_ != RunState::Stopped) stop();
+                std::wstring selectionError;
+                if (calibrator_.selectJoinPoint(config_, selectionError)) {
+                    config_.submitMode = SubmitMode::ClickJoin;
+                    persistCalibration();
+                } else if (!selectionError.empty()) {
+                    reportWarning(selectionError);
+                }
+                ui_.update(state_, config_, timing_, std::nullopt, lastError_);
+            }
         }
         if (message.message == kRecognizedCandidateMessage) {
             std::unique_ptr<RecognizedCandidate> result{reinterpret_cast<RecognizedCandidate*>(message.lParam)};
@@ -80,8 +94,6 @@ int App::run() {
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
-    UnregisterHotKey(ui_.window(), kHotkeyInput);
-    UnregisterHotKey(ui_.window(), kHotkeyJoin);
     UnregisterHotKey(ui_.window(), kHotkeyStart);
     UnregisterHotKey(ui_.window(), kHotkeyStop);
     return static_cast<int>(message.wParam);
@@ -206,10 +218,6 @@ void App::handleHotkey(WPARAM hotkeyId) {
         stop();
         return;
     }
-    if (hotkeyId == kHotkeyInput) calibrator_.recordInputPoint(config_);
-    if (hotkeyId == kHotkeyJoin) calibrator_.recordJoinPoint(config_);
-    if (hotkeyId == kHotkeyInput || hotkeyId == kHotkeyJoin) persistCalibration();
-    ui_.update(state_, config_, timing_, std::nullopt, lastError_);
 }
 
 void App::onCandidate(const Candidate& candidate) {
